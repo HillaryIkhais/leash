@@ -5,7 +5,7 @@
  * re-reads the contract from the DB at every side effect boundary.
  */
 import { defineAction } from "@agent-native/core/action";
-import { getDb } from "@agent-native/core/db";
+import { getDb } from "../server/db";
 import { z } from "zod";
 import { contracts, contractEvents } from "../server/db/schema";
 import { EVENT_TYPE } from "../server/lib/leash-constants";

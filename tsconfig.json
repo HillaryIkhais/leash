@@ -6,9 +6,19 @@
     "paths": {
       "*": ["./*"],
       "@/*": ["./app/*"],
-      "@shared/*": ["./shared/*"]
-    }
-  },
+      "@shared/*": ["./shared/*"],
+      "@agent-native/core/agent/actions/*": ["./node_modules/@agent-native/core/dist/agent/actions/*.d.ts"],
+      "@agent-native/core/feature-flags/actions/*": ["./node_modules/@agent-native/core/dist/feature-flags/actions/*.d.ts"],
+      "@agent-native/core/labs/actions/*": ["./node_modules/@agent-native/core/dist/labs/actions/*.d.ts"],
+      "@agent-native/core/secrets/actions/*": ["./node_modules/@agent-native/core/dist/secrets/actions/*.d.ts"],
+      "@agent-native/core/sharing/actions/*": ["./node_modules/@agent-native/core/dist/sharing/actions/*.d.ts"],
+      "@agent-native/core/hosted-harness/actions/*": ["./node_modules/@agent-native/core/dist/hosted-harness/actions/*.d.ts"],
+      "@agent-native/core/client/*": ["./node_modules/@agent-native/core/dist/client/*.d.ts"],
+      "@agent-native/core/server": ["./node_modules/@agent-native/core/dist/server/index.d.ts"],
+      "@agent-native/agentkit": ["./node_modules/@agent-native/agentkit/dist/index.d.ts"],
+      "@agent-native/toolkit/ui/*": ["./node_modules/@agent-native/toolkit/dist/ui/*.d.ts"],
+      "react-router/internal": ["./node_modules/react-router/dist/development/lib/types/internal.d.ts"]
+    }},
   "include": [
     "app/**/*",
     "server/**/*",

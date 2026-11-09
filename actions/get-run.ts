@@ -5,7 +5,7 @@
  * all read the same truth.
  */
 import { defineAction } from "@agent-native/core/action";
-import { getDb } from "@agent-native/core/db";
+import { getDb } from "../server/db";
 import { z } from "zod";
 import { contracts, contractDelegates, contractEvents, contractReservations, supportCases } from "../server/db/schema";
 import { desc, eq } from "drizzle-orm";

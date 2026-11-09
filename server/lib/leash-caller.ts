@@ -6,7 +6,9 @@
 import type { ActionRunContext } from "@agent-native/core/action";
 
 export interface CallParams {
-  childLabel?: string;
+  childLabel?: string | undefined;
+  /** any other caller-supplied fields the action passed through */
+  [extra: string]: unknown;
 }
 
 export function resolveCaller(input: CallParams, ctx?: ActionRunContext): string {

@@ -8,10 +8,10 @@
  * code identically across UI, agent tool-result, HTTP and MCP surfaces.
  */
 import { defineAction, ActionContractError } from "@agent-native/core/action";
-import { getDb } from "@agent-native/core/db";
+import { getDb } from "../server/db";
 import { z } from "zod";
-import { supportCases, contractEvents } from "../server/db/schema";
-import { leash } from "../server/lib/leash";
+import { supportCases, contractEvents, contractReservations } from "../server/db/schema";
+import { approveForCase, leash } from "../server/lib/leash";
 import { resolveCaller } from "../server/lib/leash-caller";
 import { eq } from "drizzle-orm";
 
@@ -27,11 +27,10 @@ export default defineAction({
   run: async (input, ctx) => {
     const caller = resolveCaller(input, ctx);
 
-    const approval = await leash.approve(input.caseId, {
+    const approval = await approveForCase(input.caseId, {
       action: "issue-refund",
       amountCents: input.amountCents,
       refund: true,
-      now: Date.now(),
       requestId: input.requestId,
     }, { caller });
 
@@ -49,10 +48,15 @@ export default defineAction({
     const db = getDb();
     const refundId = `rf_${crypto.randomUUID()}`;
     const [victim] = await db.select().from(supportCases).where(eq(supportCases.id, input.caseId)).limit(1);
+    // the receipt id IS the reservation requestId; recover the contract id it approved under
+    const [receipt] = await db.select()
+      .from(contractReservations)
+      .where(eq(contractReservations.requestId, input.requestId))
+      .limit(1);
 
     await db.insert(contractEvents).values({
       id: `ev_${crypto.randomUUID()}`,
-      contractId: input.caseId,
+      contractId: receipt?.contractId ?? approval.receiptId ?? input.caseId,
       type: "REFUND_ISSUED",
       action: "issue-refund",
       caller,

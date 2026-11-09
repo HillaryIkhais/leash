@@ -28,7 +28,8 @@ export type LeashErrorCode =
   | "count_limit_exceeded"
   | "budget_exceeded"
   | "delegate_attenuation_violation"
-  | "delegate_not_found";
+  | "delegate_not_found"
+  | "delegate_envelope_violation";
 
 export interface LeashSnapshot {
   status: string; // ACTIVE | REVOKED | EXPIRED
@@ -49,9 +50,10 @@ export interface LeashCallRequest {
   amountCents?: number;
   /** refund-type actions consume one of maxRefunds */
   refund?: boolean;
-  /** epoch ms at evaluation; caller injects clock for testability */
-  now: number;
 }
+
+/** The engine's input: a call request plus the ENFORCER's trusted clock. */
+export type TimedLeashCallRequest = LeashCallRequest & { now: number };
 
 export interface LeashApproval {
   ok: true;
@@ -122,7 +124,7 @@ export function checkAttenuation(
   return { ok: true };
 }
 
-export function evaluate(snap: LeashSnapshot, req: LeashCallRequest): LeashDecision {
+export function evaluate(snap: LeashSnapshot, req: TimedLeashCallRequest): LeashDecision {
   // A missing snapshot is the caller's fault (no contract for this case).
   if (!snap) {
     return { ok: false, code: "contract_not_found", message: "no run contract for this case" };

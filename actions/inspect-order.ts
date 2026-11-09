@@ -4,10 +4,10 @@
  * Money does not move; enforced for presence/quota/expiry only.
  */
 import { defineAction } from "@agent-native/core/action";
-import { getDb } from "@agent-native/core/db";
+import { getDb } from "../server/db";
 import { z } from "zod";
 import { supportCases } from "../server/db/schema";
-import { leash } from "../server/lib/leash";
+import { leash, approveForCase } from "../server/lib/leash";
 import { resolveCaller } from "../server/lib/leash-caller";
 import { eq } from "drizzle-orm";
 
@@ -18,11 +18,10 @@ export default defineAction({
     requestId: z.string().describe("Caller-provided idempotency key"),
   }),
   run: async (input, ctx) => {
-    const approval = await leash.approve(input.caseId, {
+    const approval = await approveForCase(input.caseId, {
       action: "inspect-order",
       amountCents: 0,
       refund: false,
-      now: Date.now(),
       requestId: input.requestId,
     }, { caller: resolveCaller(input, ctx) });
 

@@ -14,18 +14,16 @@
  *     count first, then money; if money is lost, count is released.
  *   - after approval the caller performs the side effect; then either
  *     settle() (kept) or release() (side effect failed, allowance back).
- *
- * RECONCILE on scaffold landing: db client import + drizzle helpers.
- * Written against a minimal interface so it can be typed and reviewed
- * before the scaffold exists.
  */
 
 import {
   evaluate,
   checkAttenuation,
+  type LeashApproval,
   type LeashCallRequest,
   type LeashDecision,
   type LeashErrorCode,
+  type LeashRejection,
   type LeashSnapshot,
 } from "./leash-engine";
 import { CONTRACT_STATUS, RESERVATION_STATUS, EVENT_TYPE } from "./leash-constants";
@@ -42,6 +40,13 @@ export interface LeashRow {
   expiresAt: number;
 }
 
+export interface DelegateRow {
+  label: string;
+  permittedActions: string; // JSON
+  maxRefunds: number;
+  budgetCapCents: number;
+}
+
 export interface ReservationRow {
   requestId: string;
   contractId: string;
@@ -56,12 +61,10 @@ export interface LeashContext {
   caller: string; // frontend | root-agent | subagent:<label> | mcp:<label> | http | cli
 }
 
-export interface ApproveResult {
-  outcome: "approved" | "rejected" | "replayed";
-  decision?: LeashDecision;
-  replayOf?: string; // prior outcome code on replay
-  receiptId?: string; // reservation id when approved
-}
+export type ApproveResult =
+  | { outcome: "approved"; decision: LeashApproval; receiptId: string }
+  | { outcome: "rejected"; decision: LeashRejection }
+  | { outcome: "replayed"; replayOf: string };
 
 /**
  * Everything an action's run() MUST call before any side effect:
@@ -72,6 +75,7 @@ export class LeashEnforcer {
   constructor(
     private db: {
       queryContracts: (contractId: string) => Promise<LeashRow | undefined>;
+      queryDelegate: (contractId: string, label: string) => Promise<DelegateRow | undefined>;
       queryReservation: (requestId: string) => Promise<ReservationRow | undefined>;
       insertReservation: (row: ReservationRow) => Promise<void>;
       insertEvent: (row: {
@@ -89,6 +93,7 @@ export class LeashEnforcer {
       releaseBudget: (contractId: string, amount: number) => Promise<boolean>;
       holdCount: (contractId: string) => Promise<boolean>;
       releaseCount: (contractId: string) => Promise<boolean>;
+      updateReservationStatus: (requestId: string, to: string, from: string) => Promise<boolean>;
       now: () => number;
     },
   ) {}
@@ -129,7 +134,10 @@ export class LeashEnforcer {
         }
       : (undefined as unknown as LeashSnapshot);
 
-    const decision = evaluate(snap, req);
+    // The caller's `now` is untrusted input — expiry is decided by the
+    // enforcer's clock alone, never by the request payload.
+    const decision = evaluate(snap, { ...req, now });
+
     const reservation: ReservationRow = {
       requestId: req.requestId,
       contractId,
@@ -142,8 +150,57 @@ export class LeashEnforcer {
       status: RESERVATION_STATUS.HELD,
     };
 
+    // 2.5 delegate envelope binding. A declared child acts inside its
+    // registered envelope, not just the contract's: execution-time
+    // attenuation, fail-closed for unknown labels. This is what makes the
+    // delegation envelope binding rather than decorative. Runs only when
+    // the contract gate passed — the contract's own rejection code wins.
+    const childLabel = ctx.caller.startsWith("subagent:")
+      ? ctx.caller.slice("subagent:".length).replace(/:d\d+$/, "")
+      : null;
+    let delegateRow: DelegateRow | undefined;
+    if (childLabel && decision.ok) {
+      delegateRow = await this.db.queryDelegate(contractId, childLabel);
+      let envelopeViolation: string | null = null;
+      if (!delegateRow) {
+        envelopeViolation = `declared child '${childLabel}' is not registered on this contract`;
+      } else {
+        const permitted = JSON.parse(delegateRow.permittedActions) as string[];
+        if (!permitted.includes(req.action)) {
+          envelopeViolation = `${req.action} is not in child '${childLabel}'s delegated envelope`;
+        } else if ((req.amountCents ?? 0) > delegateRow.budgetCapCents) {
+          envelopeViolation = `amount $${fmtCents(req.amountCents ?? 0)} exceeds child '${childLabel}'s cap $${fmtCents(delegateRow.budgetCapCents)}`;
+        } else if (req.refund && delegateRow.maxRefunds <= 0) {
+          envelopeViolation = `child '${childLabel}' was delegated no refunds`;
+        }
+      }
+      if (envelopeViolation) {
+        await this.insertReservationSafe({
+          ...reservation,
+          outcome: "REJECTED:delegate_envelope_violation",
+        });
+        await this.insertEventSafe(contractId, {
+          type: EVENT_TYPE.REJECTED,
+          action: req.action,
+          caller: ctx.caller,
+          amountCents: req.amountCents ?? 0,
+          code: delegateRow ? "delegate_envelope_violation" : "delegate_not_found",
+          detail: JSON.stringify({ message: envelopeViolation, child: childLabel }),
+          createdAt: now,
+        });
+        return {
+          outcome: "rejected",
+          decision: {
+            ok: false,
+            code: delegateRow ? "delegate_envelope_violation" : "delegate_not_found",
+            message: envelopeViolation,
+          },
+        };
+      }
+    }
+
     if (!decision.ok) {
-      await this.db.insertReservation(reservation);
+      await this.insertReservationSafe(reservation);
       await this.insertEventSafe(contractId, {
         type: EVENT_TYPE.REJECTED,
         action: req.action,
@@ -167,10 +224,7 @@ export class LeashEnforcer {
           code: "count_limit_exceeded",
           message: `maxRefunds ${snap.maxRefunds} already consumed`,
         };
-        await this.db.insertReservation({
-          ...reservation,
-          outcome: `REJECTED:${raced.code}`,
-        });
+        await this.insertReservationSafe({ ...reservation, outcome: `REJECTED:${raced.code}` });
         await this.insertEventSafe(contractId, {
           type: EVENT_TYPE.REJECTED,
           action: req.action,
@@ -193,10 +247,7 @@ export class LeashEnforcer {
           code: "budget_exceeded",
           message: "concurrent call consumed the remaining allowance",
         };
-        await this.db.insertReservation({
-          ...reservation,
-          outcome: `REJECTED:${raced.code}`,
-        });
+        await this.insertReservationSafe({ ...reservation, outcome: `REJECTED:${raced.code}` });
         await this.insertEventSafe(contractId, {
           type: EVENT_TYPE.REJECTED,
           action: req.action,
@@ -210,7 +261,16 @@ export class LeashEnforcer {
       }
     }
 
-    await this.db.insertReservation(reservation);
+    const inserted = await this.insertReservationSafe(reservation);
+    // if the insert lost a conflict, a concurrent call reserved this
+    // requestId between our checks — unwind our holds and replay the
+    // winner's receipt; never re-execute
+    if (!inserted) {
+      if (heldMoney) await this.db.releaseBudget(contractId, req.amountCents ?? 0);
+      if (heldCount) await this.db.releaseCount(contractId);
+      const winner = await this.db.queryReservation(req.requestId);
+      return { outcome: "replayed", replayOf: winner?.outcome ?? "APPROVED" };
+    }
     await this.insertEventSafe(contractId, {
       type: EVENT_TYPE.EXECUTED,
       action: req.action,
@@ -264,10 +324,25 @@ export class LeashEnforcer {
       /* ledger best-effort for not-found contracts */
     }
   }
+
+  /** Insert the reservation; on a unique-requestId conflict the concurrent
+   *  winner's row stands — returns whether THIS insert won. */
+  private async insertReservationSafe(row: ReservationRow): Promise<boolean> {
+    try {
+      await this.db.insertReservation(row);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 function isRefundAction(action: string): boolean {
   return action === "issue-refund"; // kept in one place, reconciled with actions
+}
+
+function fmtCents(cents: number): string {
+  return (cents / 100).toFixed(2);
 }
 
 function cryptoLikeId(): string {

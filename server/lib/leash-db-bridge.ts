@@ -14,15 +14,15 @@
  * (getDb vs direct import of a db client object).
  */
 import { and, eq, sql } from "drizzle-orm";
-import { getDb } from "@agent-native/core/db";
+import { getDb } from "../db";
 import {
   contracts,
+  contractDelegates,
   contractReservations,
   contractEvents,
-  type InferSelectModel,
 } from "../db/schema";
 
-type ContractRow = InferSelectModel<typeof contracts>;
+type ContractRow = typeof contracts.$inferSelect;
 
 export function makeLeashBridge() {
   const now = () => Date.now();
@@ -36,6 +36,23 @@ export function makeLeashBridge() {
         .select()
         .from(contracts)
         .where(eq(contracts.id, contractId))
+        .limit(1);
+      return row;
+    },
+
+    async queryDelegate(contractId: string, label: string) {
+      const [row] = await db()
+        .select({
+          label: contractDelegates.label,
+          permittedActions: contractDelegates.permittedActions,
+          maxRefunds: contractDelegates.maxRefunds,
+          budgetCapCents: contractDelegates.budgetCapCents,
+        })
+        .from(contractDelegates)
+        .where(and(
+          eq(contractDelegates.contractId, contractId),
+          eq(contractDelegates.label, label),
+        ))
         .limit(1);
       return row;
     },

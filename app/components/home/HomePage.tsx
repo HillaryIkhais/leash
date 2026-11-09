@@ -10,7 +10,7 @@ import { CoreComposerRuntimeProvider } from "@agent-native/toolkit/app/chat/agen
 import { CoreAgentKitRoot } from "@agent-native/toolkit/app/chat/agentkit-chat/index";
 import { useRealtimeVoiceModeOptional } from "@agent-native/toolkit/app/chat/composer";
 import { WaveBackground } from "@agent-native/toolkit/app/shared";
-import { AgentNativeIcon } from "@agent-native/toolkit/app/shared/AgentNativeIcon";
+import { AgentNativeIcon } from "@agent-native/toolkit/app/shared";
 import {
   IconBook,
   IconBrandDiscord,

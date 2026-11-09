@@ -4,9 +4,9 @@
  * themselves authority; only the issuer can.
  */
 import { defineAction } from "@agent-native/core/action";
-import { getDb } from "@agent-native/core/db";
+import { getDb } from "../server/db";
 import { z } from "zod";
-import { supportCases } from "../server/db/schema";
+import { supportCases, contracts, contractEvents } from "../server/db/schema";
 import { EVENT_TYPE } from "../server/lib/leash-constants";
 import { eq } from "drizzle-orm";
 

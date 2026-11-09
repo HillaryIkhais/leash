@@ -5,7 +5,7 @@
  */
 import { defineAction } from "@agent-native/core/action";
 import { z } from "zod";
-import { leash } from "../server/lib/leash";
+import { approveForCase, leash } from "../server/lib/leash";
 import { resolveCaller } from "../server/lib/leash-caller";
 
 export default defineAction({
@@ -18,11 +18,10 @@ export default defineAction({
   }),
   run: async (input, ctx) => {
     const caller = resolveCaller(input, ctx);
-    const approval = await leash.approve(input.caseId, {
+    const approval = await approveForCase(input.caseId, {
       action: "draft-response",
       amountCents: 0,
       refund: false,
-      now: Date.now(),
       requestId: input.requestId,
     }, { caller });
 

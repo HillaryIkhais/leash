@@ -53,7 +53,7 @@ export default function RunControl() {
     | undefined;
   const receipts: Array<{
     id: string; type: string; action: string | null; caller: string;
-    amountCents: number | null; code: string | null; createdAt: number; detail?: string;
+    amountCents: number | null; code: string | null; detail?: string | null; createdAt: number;
   }> = run.data?.receipts ?? [];
   const delegates: Array<{
     label: string; permittedActions: string[]; maxRefunds: number; budgetCapCents: number;
@@ -68,10 +68,6 @@ export default function RunControl() {
 
   // Mutations — same actions, same gate the agent uses, frontend surface
   const refund = useActionMutation("issue-refund", {
-    onMutate: () => {},
-    onSuccess: (d: any) => {
-      if (d?.receiptId) setLastRefundReceipt(d.requestId);
-    },
     onSettled: () => run.refetch(),
   });
   const inspect = useActionMutation("inspect-order", { onSettled: () => run.refetch() });
@@ -158,25 +154,29 @@ export default function RunControl() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {beat(
             "Inspect order",
-            () => inspect.mutate({ caseId: contractId, requestId: newRequestId("inspect") }),
+            () => inspect.mutate({ caseId: c?.caseId ?? contractId, requestId: newRequestId("inspect") }),
             "border-sky-500/30 bg-sky-950/30 text-sky-200",
             "permitted read · expected EXECUTED",
           )}
           {beat(
             "Refund $18.00",
-            () => refund.mutate({ caseId: contractId, amountCents: 1800, requestId: newRequestId("refund1800") }),
+            () => {
+              const rid = newRequestId("refund1800");
+              setLastRefundReceipt(rid);
+              refund.mutate({ caseId: c?.caseId ?? contractId, amountCents: 1800, requestId: rid });
+            },
             "border-emerald-500/30 bg-emerald-950/30 text-emerald-200",
             "legit refund · expected EXECUTED",
           )}
           {beat(
             "Refund $70.00",
-            () => refund.mutate({ caseId: contractId, amountCents: 7000, requestId: newRequestId("refund7000") }),
+            () => refund.mutate({ caseId: c?.caseId ?? contractId, amountCents: 7000, requestId: newRequestId("refund7000") }),
             "border-amber-500/30 bg-amber-950/30 text-amber-200",
             "over ceiling · expected REJECTED budget_exceeded",
           )}
           {beat(
             "Change account owner",
-            () => owner.mutate({ caseId: contractId, newOwner: "attacker@mail.com", requestId: newRequestId("owner") }),
+            () => owner.mutate({ caseId: c?.caseId ?? contractId, newOwner: "attacker@mail.com", requestId: newRequestId("owner") }),
             "border-rose-500/30 bg-rose-950/30 text-rose-200",
             "forbidden action · expected REJECTED forbidden_action",
           )}
@@ -198,7 +198,7 @@ export default function RunControl() {
             "Child tries refund $1",
             () =>
               refund.mutate({
-                caseId: contractId,
+                caseId: c?.caseId ?? contractId,
                 amountCents: 100,
                 requestId: newRequestId("child-refund"),
                 childLabel: "ops-child",
@@ -210,7 +210,7 @@ export default function RunControl() {
             "Replay last refund",
             () => {
               if (!lastRefundReceipt) return;
-              refund.mutate({ caseId: contractId, amountCents: 1800, requestId: lastRefundReceipt });
+              refund.mutate({ caseId: c?.caseId ?? contractId, amountCents: 1800, requestId: lastRefundReceipt });
             },
             "border-fuchsia-500/30 bg-fuchsia-950/30 text-fuchsia-200",
             lastRefundReceipt ? "same requestId · expected REPLAYED, never twice" : "run a refund first",

@@ -12,7 +12,7 @@ import {
 } from "@agent-native/toolkit/app/chat/ownership-history";
 import { OrgSwitcher } from "@agent-native/toolkit/app/org";
 import { openCommandMenu } from "@agent-native/toolkit/app/shared";
-import { AgentNativeIcon } from "@agent-native/toolkit/app/shared/AgentNativeIcon";
+import { AgentNativeIcon } from "@agent-native/toolkit/app/shared";
 import {
   IconEdit,
   IconHome,

@@ -3,7 +3,7 @@
  * the run contract binds to.
  */
 import { defineAction } from "@agent-native/core/action";
-import { getDb } from "@agent-native/core/db";
+import { getDb } from "../server/db";
 import { z } from "zod";
 import { supportCases } from "../server/db/schema";
 

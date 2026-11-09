@@ -42,3 +42,8 @@ run contract for it: call `get-run` with its contractId. Know your envelope:
 - `action_not_permitted` — outside your permitted set; ask the issuer.
 - `count_limit_exceeded` — the contract allows no more of this action type.
 - `budget_exceeded` — the ceiling is spent, possibly by a concurrent call.
+- `delegate_envelope_violation` — outside your own delegated envelope
+  (action, amount cap, or refund count). Ask the parent to widen the
+  envelope first; never impersonate another caller.
+- `delegate_not_found` — you declared a childLabel that is not registered
+  on this contract. Register it via `delegate-contract` first.

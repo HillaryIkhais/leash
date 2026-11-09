@@ -193,4 +193,4 @@ export default function Root() {
   );
 }
 
-export { ErrorBoundary } from "@agent-native/toolkit/app/shared/ErrorBoundary";
+export { ErrorBoundary } from "@agent-native/toolkit/app/shared";

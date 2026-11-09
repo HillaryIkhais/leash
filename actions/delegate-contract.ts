@@ -5,7 +5,7 @@
  * a child can only ever be narrower than its parent on every axis.
  */
 import { defineAction } from "@agent-native/core/action";
-import { getDb } from "@agent-native/core/db";
+import { getDb } from "../server/db";
 import { z } from "zod";
 import { checkAttenuation } from "../server/lib/leash-engine";
 import { resolveCaller } from "../server/lib/leash-caller";
