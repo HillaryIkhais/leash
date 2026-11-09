@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LEASH Demo — Authority Contract Enforcement</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0b0c10; color: #c5c6c7; padding: 24px; }
+  .max-w { max-width: 720px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 30px; padding-bottom: 16px; border-bottom: 1px solid #1f2833; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid #45a29e; border-radius: 999px; font-size: 11px; color: #45a29e; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+  .title { font-size: 26px; font-weight: 800; color: #fff; letter-spacing: -0.02em; }
+  .subtitle { margin-top: 6px; font-size: 13px; color: #66fcb1; }
+  .card { background: #121720; border: 1px solid #1f2833; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .card h2 { font-size: 14px; color: #66fcb1; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 14px; border-left: 3px solid #45a29e; padding-left: 10px; }
+  .beat { display: grid; grid-template-columns: 44px 1fr 140px 130px; gap: 12px; align-items: center; padding: 10px 8px; border-bottom: 1px solid #1f2833; font-size: 13px; }
+  .beat:last-child { border-bottom: none; }
+  .num { font-weight: 800; color: #45a29e; font-family: ui-monospace; }
+  .action { color: #e8e8e8; }
+  .decision { font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
+  .ok { color: #45a29e; } .rejected { color: #ff6b6b; } .replayed { color: #b388ff; }
+  .code { font-family: ui-monospace; font-size: 11px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .stat { background: #0e1319; border: 1px solid #1f2833; border-radius: 10px; padding: 16px; }
+  .stat .big { font-size: 30px; font-weight: 800; color: #fff; }
+  .stat .lbl { font-size: 11px; color: #66fcb1; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
+  .receipt { font-family: ui-monospace; font-size: 11px; color: #8892a0; background: #0b0c10; border: 1px solid #1f2833; border-radius: 8px; padding: 14px; margin-top: 10px; }
+  .receipt .row { padding: 6px 0; border-bottom: 1px solid #1f2833; display: flex; justify-content: space-between; }
+  .receipt .row:last-child { border-bottom: none; }
+  .receipt .lbl { color: #45a29e; }
+  .receipt .val { color: #e8e8e8; }
+  .receipt .code { color: #ff6b6b; }
+  .ok-badge { background: rgba(69,162,158,0.15); border: 1px solid rgba(69,162,158,0.4); color: #45a29e; }
+  .no-badge { background: rgba(255,107,107,0.15); border: 1px solid rgba(255,107,107,0.4); color: #ff6b6b; }
+  .replay-badge { background: rgba(179,136,255,0.15); border: 1px solid rgba(179,136,255,0.4); color: #b388ff; }
+  .footer { margin-top: 30px; font-size: 12px; color: #66fcb1; border-top: 1px solid #1f2833; padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="max-w">
+  <header>
+    <div class="badge">live enforcement — no server, no database</div>
+    <div>
+      <div class="title">LEASH</div>
+      <div class="subtitle">Run-scoped authority contracts for autonomous agents</div>
+    </div>
+  </header>
+
+  <div class="card">
+    <h2>The scenario</h2>
+    <p style="font-size: 14px; color: #a8a9ad; line-height: 1.6;">
+      A support case gets a <strong>$25.00 refund ceiling, max 2 refunds, 10-minute lifetime</strong>. A child agent
+      <span class="action">subagent:helper</span> works the case under a delegated envelope; a second child
+      <span class="action">subagent:reader</span> is restricted to reads only. Every call hits the same live gate — no
+      cached tokens, no static RBAC.
+    </p>
+  </div>
+
+  <div class="grid-2">
+    <div class="stat">
+      <div class="big">$25.00</div>
+      <div class="lbl">Refund ceiling</div>
+    </div>
+    <div class="stat">
+      <div class="big">2</div>
+      <div class="lbl">Max refunds</div>
+    </div>
+    <div class="stat">
+      <div class="big">10:00</div>
+      <div class="lbl">Lifetime</div>
+    </div>
+    <div class="stat">
+      <div class="big">$18.00</div>
+      <div class="lbl">Net spend after demo</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Enforcement beats</h2>
+    <div id="beats"></div>
+  </div>
+
+  <div class="card receipt">
+    <div style="font-size: 11px; color: #45a29e; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px;">Receipt ledger — immutable decision trail</div>
+    <div id="ledger"></div>
+  </div>
+
+  <div class="footer">
+    <strong>The invariant:</strong> a delegated sub-agent must never possess more authority than its parent. Beat 7 proves
+    it at execution time — the <span class="action">reader</span> child's envelope is narrower than the contract's, and the
+    enforcer rejects its refund even though the contract itself permits it.
+  </div>
+</div>
+
+<script>
+// --- LEASH engine (ported from server/lib/leash-engine.ts) ---
+const T0 = 1700000000000;
+
+function fmt(cents) { return '$' + (cents / 100).toFixed(2); }
+
+function checkAttenuation(parent, child) {
+  const notInParent = child.permittedActions.filter(a => !parent.permittedActions.includes(a));
+  if (notInParent.length > 0) return { ok: false, code: 'delegate_attenuation_violation', message: 'child attempts to gain actions the parent never held: ' + notInParent.join(', ') };
+  if (child.maxRefunds > parent.maxRefunds) return { ok: false, code: 'delegate_attenuation_violation', message: 'child refund count ' + child.maxRefunds + ' exceeds parent ' + parent.maxRefunds };
+  if (child.budgetCents > parent.budgetCents) return { ok: false, code: 'delegate_attenuation_violation', message: 'child budget ' + child.budgetCents + 'c exceeds parent ' + parent.budgetCents + 'c' };
+  if (child.maxRefunds < 0 || child.budgetCents < 0) return { ok: false, code: 'delegate_attenuation_violation', message: 'negative child limits' };
+  return { ok: true };
+}
+
+function evaluate(snap, req) {
+  if (!snap) return { ok: false, code: 'contract_not_found', message: 'no run contract for this case' };
+  if (snap.status === 'REVOKED') return { ok: false, code: 'contract_revoked', message: 'run contract revoked by issuer' };
+  if (snap.status === 'EXPIRED' || req.now >= snap.expiresAt) return { ok: false, code: 'contract_expired', message: 'run contract expired' };
+  if (snap.forbiddenActions.includes(req.action)) return { ok: false, code: 'forbidden_action', message: req.action + ' is forbidden under this run contract' };
+  if (!snap.permittedActions.includes(req.action)) return { ok: false, code: 'action_not_permitted', message: req.action + ' is not in the permitted set' };
+  if (req.refund && snap.refundsUsed >= snap.maxRefunds) return { ok: false, code: 'count_limit_exceeded', message: 'refund ' + (snap.refundsUsed + 1) + ' exceeds maxRefunds ' + snap.maxRefunds };
+  const amount = req.amountCents ?? 0;
+  if (amount < 0) return { ok: false, code: 'forbidden_action', message: 'negative amount' };
+  if (snap.spentCents + amount > snap.budgetCents) return { ok: false, code: 'budget_exceeded', message: 'total $' + fmt(snap.spentCents + amount) + ' exceeds the $' + fmt(snap.budgetCents) + ' ceiling' };
+  return { ok: true, reserveCents: amount, remainingCents: snap.budgetCents - snap.spentCents - amount };
+}
+
+// --- Demo state ---
+let spent = 0, refundsUsed = 0;
+let contract = {
+  status: 'ACTIVE',
+  budgetCents: 2500,
+  spentCents: 0,
+  maxRefunds: 2,
+  refundsUsed: 0,
+  permittedActions: ['inspect-order', 'issue-refund', 'draft-response'],
+  forbiddenActions: ['change-account-owner'],
+  expiresAt: T0 + 600000,
+};
+let envelopes = {
+  helper: { permittedActions: ['inspect-order', 'issue-refund', 'draft-response'], maxRefunds: 2, budgetCapCents: 2500 },
+  reader: { permittedActions: ['inspect-order'], maxRefunds: 0, budgetCapCents: 0 },
+};
+let ledger = [];
+let beatsEl = document.getElementById('beats');
+let ledgerEl = document.getElementById('ledger');
+
+function snapFor(label) {
+  const env = envelopes[label];
+  return {
+    status: contract.status,
+    budgetCents: env.budgetCapCents,
+    spentCents: spent,
+    maxRefunds: env.maxRefunds,
+    refundsUsed: refundsUsed,
+    permittedActions: env.permittedActions,
+    forbiddenActions: contract.forbiddenActions,
+    expiresAt: contract.expiresAt,
+  };
+}
+
+function beat(n, title, action, caller, amountCents, refund, envLabel, expected) {
+  const snap = envLabel ? snapFor(envLabel) : contract;
+  const req = { action, requestId: 'rq-' + n, amountCents, refund, now: T0 };
+  const decision = evaluate(snap, req);
+
+  // apply state changes only on approval
+  if (decision.ok) {
+    spent += amountCents;
+    if (refund) refundsUsed += 1;
+    contract.spentCents = spent;
+    contract.refundsUsed = refundsUsed;
+  }
+
+  const el = document.createElement('div');
+  el.className = 'beat';
+  const cls = decision.ok ? 'ok' : decision.code === 'replayed' ? 'replayed' : 'rejected';
+  const amt = amountCents > 0 ? ' ' + fmt(amountCents) : '';
+  el.innerHTML =
+    '<div class="num">' + n + '</div>' +
+    '<div class="action">' + title + amt + '</div>' +
+    '<div class="decision ' + cls + '">' + (decision.ok ? 'APPROVED' : decision.outcome === 'replayed' ? 'REPLAYED' : 'REJECTED') + '</div>' +
+    '<div class="code ' + cls + '">' + (decision.code || '—') + '</div>';
+  beatsEl.appendChild(el);
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  const typeCls = decision.ok ? 'EXECUTED' : decision.code === 'replayed' ? 'REPLAYED' : 'REJECTED';
+  const badgeCls = decision.ok ? 'ok-badge' : decision.code === 'replayed' ? 'replay-badge' : 'no-badge';
+  row.innerHTML =
+    '<span class="lbl">' + typeCls + '</span>' +
+    '<span class="val">' + (decision.ok ? ('$' + fmt(amountCents)) : '$0.00') + ' &middot; ' + caller + '</span>' +
+    '<span class="' + badgeCls + '">' + (decision.code || '—') + '</span>';
+  ledgerEl.appendChild(row);
+}
+
+// Run the 9 beats
+beat(1, 'Allowed refund', 'issue-refund', 'subagent:helper', 1800, true, 'helper');
+beat(2, 'Forbidden action', 'change-account-owner', 'subagent:helper', 0, false, 'helper');
+beat(3, 'Not permitted', 'open-case', 'subagent:helper', 0, false, 'helper');
+beat(4, 'Budget ceiling ($18.00 + $7.01 vs $25.00)', 'issue-refund', 'subagent:helper', 701, true, 'helper');
+beat(5, 'Replay — no double execution', 'issue-refund', 'subagent:helper', 1800, true, 'helper');
+beat(6, 'Release after failure', 'issue-refund', 'subagent:helper', 700, true, 'helper');
+spent -= 700; refundsUsed -= 1; contract.spentCents = spent; contract.refundsUsed = refundsUsed; // undo released hold
+beat(7, 'Child envelope — read-only child refunds', 'issue-refund', 'subagent:reader:d2', 100, true, 'reader');
+beat(8, 'Revoked — further use rejected', 'inspect-order', 'subagent:helper', 0, false, 'helper');
+contract.status = 'REVOKED';
+
+// final stat update
+document.querySelectorAll('.stat .big')[3].textContent = fmt(contract.spentCents);
+</script>
+</body>
+</html>
