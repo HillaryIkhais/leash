@@ -10,18 +10,24 @@ the human ends it.
 **The framework decides whether a *caller* may call an action (RBAC, OAuth,
 org roles). LEASH decides whether this *run* may continue.**
 
-## The problem
+## The moment it matters
 
-Framework permissions are deployment-static: who may call which tool, set once
-at deploy time. They cannot answer the questions that matter the moment an
-agent starts doing real work on a specific case:
+Your agent is authorized to refund up to $25 on a damaged order. It issues a
+$18 refund. Then it retries the same request — without LEASH, that retry is a
+second $18. Your agent spawns a child to investigate; without LEASH, that child
+inherits the full $25 ceiling, not the $7 left. You hit revoke because the
+customer changed their mind; without LEASH, held authorizations often keep
+working because they were cached at deploy time.
 
-- *How much money may this run move in total?* (cumulative, not per-call)
-- *How many times may it act?* (count, not just scope)
-- *Until when is any of this valid?* (expiry)
-- *If a child agent is spawned, how much authority does it inherit?* (attenuation)
-- *If the human changes their mind mid-run, what stops the next call?* (revocation)
-- *If a request is retried, what stops a double refund?* (idempotency)
+Ordinary agent permissions answer "who may call this tool?" — set once, static,
+per-deployment. They cannot answer what matters *during* a specific case:
+
+- How much money may this run move in total? (cumulative, not per-call)
+- How many times may it act? (count, not just scope)
+- Until when is any of this valid? (expiry)
+- If a child agent is spawned, how much authority does it inherit? (attenuation)
+- If the human changes their mind mid-run, what stops the next call? (revocation)
+- If a request is retried, what stops a double refund? (idempotency)
 
 Without run-scoped answers, a delegated sub-agent silently inherits everything
 its parent can do, retries double-spend, and a "stop" has no guaranteed
