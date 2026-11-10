@@ -3,5 +3,7 @@
   "framework": null,
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm migrate:production && pnpm build",
-  "crons": []
+  "env": {
+    "AGENT_NATIVE_VERCEL_CRON_SCHEDULE": "0 9 * * *"
+  }
 }
