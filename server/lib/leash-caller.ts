@@ -3,10 +3,18 @@
  * Uses framework-verified context: ctx.caller, ctx.mcpClient.name (real, external),
  * ctx.delegationDepth (real sub-agent provenance).
  *
- * CRITICAL: Child agent identity is now resolved from the framework's verified
- * delegation context, NOT from caller-supplied input. The input.childLabel is
- * ignored for identity — only the framework's delegation context and the registered
- * delegate label from the contract are trusted.
+ * IMPORTANT: The Agent-Native framework does NOT provide cryptographically verified
+ * child agent identity. The `ctx.caller` is a fixed union type:
+ *   "tool" | "http" | "frontend" | "mcp-widget" | "mcp-widget-write" | "cli" | "mcp" | "webmcp" | "a2a" | "automation"
+ * 
+ * The framework provides `delegationDepth` (number) but no label. Child agent
+ * identity in LEASH is registered in `contractDelegates` and the enforcer trusts
+ * the caller string format "subagent:<label>" IF the caller provides it.
+ * This is a TRUST MODEL, not a cryptographic guarantee. The framework does not
+ * bind delegationDepth to a specific registered label.
+ * 
+ * For true delegation provenance, the application would need to implement
+ * its own agent spawning mechanism that sets a verified caller string.
  */
 import type { ActionRunContext } from "@agent-native/core/action";
 
@@ -18,19 +26,18 @@ export interface CallParams {
 }
 
 export function resolveCaller(input: CallParams, ctx?: ActionRunContext): string {
-  // Framework-verified delegation: if ctx.caller already contains a verified
-  // subagent label (format: "subagent:<label>"), use it directly.
-  // This happens when the framework spawns a child agent with a registered delegate.
+  // If the caller explicitly provides a subagent label (e.g., from a custom
+  // agent spawning mechanism that sets ctx.caller), use it.
+  // Note: The framework does NOT set caller to "subagent:<label>" by default.
   if (ctx?.caller && typeof ctx.caller === "string" && ctx.caller.startsWith("subagent:")) {
     return ctx.caller;
   }
 
-  // Framework-verified delegation depth without explicit label in caller.
-  // The framework provides delegationDepth but the label must come from
-  // the registered delegate. For now, return a generic verified caller;
-  // the enforcer will fail-closed if the label doesn't match a registered delegate.
+  // Framework provides delegationDepth but no label. We cannot derive a
+  // verified label from depth alone. Return a generic delegation marker.
+  // The enforcer will fail-closed if this doesn't match a registered delegate.
   if (ctx?.delegationDepth != null && ctx.delegationDepth > 0) {
-    return `subagent:verified:d${ctx.delegationDepth}`;
+    return `subagent:depth:${ctx.delegationDepth}`;
   }
 
   // No delegation context — use base caller
@@ -45,17 +52,18 @@ export function resolveCaller(input: CallParams, ctx?: ActionRunContext): string
  * Resolve the verified delegate label for a given delegation depth.
  * This MUST be called from the enforcer where we have DB access to the
  * contract's delegate registry. Never trust caller-supplied labels.
+ * 
+ * NOTE: The framework does not bind delegationDepth to a specific label.
+ * This function is a placeholder — true binding requires application-level
+ * agent spawning that sets ctx.caller to "subagent:<registered-label>".
  */
 export async function resolveVerifiedDelegateLabel(
   contractId: string,
   delegationDepth: number,
   db: { queryDelegate: (contractId: string, label: string) => Promise<any> }
 ): Promise<string | null> {
-  // In a real implementation, we'd maintain a mapping from delegationDepth
-  // to the registered delegate label. For now, we delegate to the enforcer's
-  // delegate lookup which uses the caller string's label portion.
-  // The key insight: the enforcer extracts the label from the caller string
-  // "subagent:<label>" and verifies it against the contractDelegates table.
-  // So the caller string MUST contain the verified label.
-  return null; // Placeholder - actual resolution happens in enforcer
+  // The framework provides delegationDepth but not a label mapping.
+  // Without application-level binding, we cannot resolve depth -> label.
+  // Return null to indicate unverified identity; enforcer will fail-closed.
+  return null;
 }

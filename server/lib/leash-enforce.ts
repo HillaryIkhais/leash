@@ -15,14 +15,22 @@
  *   - after approval the caller performs the side effect; then either
  *     settle() (kept) or release() (side effect failed, allowance back).
  *
- * DELEGATION IDENTITY: Child agent identity is now verified against the
- * contractDelegates registry. The caller string format is:
- *   - "subagent:<label>" for verified delegates (label from registry)
- *   - "root-agent" for the root agent
- *   - "mcp:<name>" for MCP clients
- *   - "frontend" for UI callers
- * The enforcer extracts the label and verifies it exists in contractDelegates.
- * Caller-supplied childLabel in action inputs is IGNORED for identity.
+ * DELEGATION IDENTITY (HONEST MODEL):
+ * The Agent-Native framework does NOT provide cryptographically verified
+ * child agent identity. The `ctx.caller` is a fixed union type without
+ * "subagent". The framework provides `delegationDepth` (number) but NO label.
+ *
+ * LEASH's delegation model is a TRUST MODEL:
+ * - Child delegates are registered in `contractDelegates` with a label
+ * - If a caller provides a string "subagent:<label>" in ctx.caller,
+ *   the enforcer verifies that label against the registry
+ * - The framework does NOT automatically set ctx.caller to "subagent:<label>"
+ *   for child agents. This requires application-level agent spawning.
+ * - Without verified caller string, enforcer fails-closed (delegate_not_found)
+ * - Caller-supplied childLabel in action inputs is IGNORED for identity.
+ *
+ * For true delegation provenance, the application must implement its own
+ * agent spawning that sets ctx.caller to "subagent:<registered-label>".
  */
 
 import {

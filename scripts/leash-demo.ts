@@ -6,6 +6,13 @@
  * Run: pnpm demo
  *   (equivalently: node --experimental-transform-types \
  *      --import ./tests/register-ts-resolve.mjs scripts/leash-demo.ts)
+ *
+ * IMPORTANT: This demo SIMULATES what happens when the application sets
+ * ctx.caller = "subagent:<label>" for child agents. The Agent-Native
+ * framework does NOT automatically do this. The framework provides
+ * delegationDepth but NO label. For the enforcer to verify child identity,
+ * the application MUST set ctx.caller = "subagent:<registered-label>".
+ * This is a TRUST MODEL, not a cryptographic guarantee.
  */
 import { LeashEnforcer, type ApproveResult } from "../server/lib/leash-enforce";
 import { EVENT_TYPE } from "../server/lib/leash-constants";
@@ -55,21 +62,21 @@ function report(result: ApproveResult): string {
   return `replayed | replayOf: ${result.replayOf}`;
 }
 
-banner("1", "child agent performs an ALLOWED action");
-// Caller is now "subagent:helper" - verified label from contractDelegates
+banner("1", "registered delegate 'helper' performs an ALLOWED action");
+// App provides caller="subagent:helper" — enforcer verifies against contractDelegates
 const ok = await approve("rq-01", "issue-refund", "subagent:helper", 1800, true);
 console.log("  decision:", report(ok));
 await leash.settle("rq-01");
 
-banner("2", "child attempts an action OUTSIDE its delegation (forbidden list)");
+banner("2", "delegate attempts an action OUTSIDE its delegation (forbidden list)");
 const forbidden = await approve("rq-02", "change-account-owner", "subagent:helper");
 console.log("  decision:", report(forbidden));
 
-banner("3", "child attempts an action NOT IN the permitted set");
+banner("3", "delegate attempts an action NOT IN the permitted set");
 const notPermitted = await approve("rq-03", "open-case", "subagent:helper");
 console.log("  decision:", report(notPermitted));
 
-banner("4", "child attempts to EXCEED the budget ($18.00 spent + $7.01 vs $25.00)");
+banner("4", "delegate attempts to EXCEED the budget ($18.00 spent + $7.01 vs $25.00)");
 const overspend = await approve("rq-04", "issue-refund", "subagent:helper", 701, true);
 console.log("  decision:", report(overspend));
 
@@ -83,12 +90,12 @@ console.log("  approved:", doomed.outcome, "| receipt:", doomed.outcome === "app
 const released = await leash.release("rq-06");
 console.log("  side effect failed -> released:", released, "| allowance returned, RELEASED receipt written");
 
-banner("7", "reader child acts OUTSIDE ITS OWN envelope (attenuation, enforced live)");
+banner("7", "registered delegate 'reader' acts OUTSIDE ITS OWN envelope (attenuation, enforced live)");
 // Reader delegate only has inspect-order, no refunds, no budget
 const envelope = await approve("rq-07", "issue-refund", "subagent:reader", 100, true);
 console.log("  decision:", report(envelope));
 
-banner("8", "parent REVOKES the delegation; further use is rejected");
+banner("8", "parent REVOKES the contract; further use is rejected");
 db.contracts.get("ct_demo_1")!.status = "REVOKED";
 db.events.push({
   id: "ev-revoke-demo", contractId: "ct_demo_1", type: EVENT_TYPE.REVOKED, action: null,

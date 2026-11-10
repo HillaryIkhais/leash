@@ -3,6 +3,13 @@
  * The agent receives a support case, inspects the order, determines resolution,
  * executes permitted actions through LEASH, and produces a complete resolution outcome.
  * All actions go through LEASH enforcement with framework-verified caller identity.
+ *
+ * HONESTY: The resolution status reflects actual execution outcomes.
+ * - "resolved_with_refund": all required actions succeeded, refund executed
+ * - "resolved_no_refund": all required actions succeeded, no refund warranted
+ * - "partial_refund_rejected": refund rejected by LEASH (budget/count), response drafted
+ * - "partial_response_failed": response drafting failed
+ * - "failed": required action (inspect-order) failed
  */
 import { defineAction, ActionContractError } from "@agent-native/core/action";
 import { getDb } from "../server/db";
@@ -22,7 +29,7 @@ const RESOLUTION_STEPS = [
 
 export default defineAction({
   description:
-    "Autonomously resolve a support case through LEASH-governed actions. The agent inspects the order, determines the appropriate resolution, attempts refunds (LEASH enforces authority), drafts customer response, and closes the case.",
+    "Autonomously resolve a support case through LEASH-governed actions. The agent inspects the order, determines the appropriate resolution, attempts refunds (LEASH enforces authority), drafts customer response, and closes the case. Resolution status honestly reflects which actions succeeded or failed.",
   schema: z.object({
     caseId: z.string().describe("Support case to resolve"),
     requestIdPrefix: z.string().default("resolve").describe("Prefix for idempotency keys"),
@@ -84,8 +91,11 @@ export default defineAction({
     let refundAmount = 0;
     let customerResponse = "";
     let resolutionReason = "";
+    let inspectSucceeded = false;
+    let refundSucceeded = false;
+    let responseSucceeded = false;
 
-    // STEP 1: Inspect the order
+    // STEP 1: Inspect the order (REQUIRED)
     const inspectRequestId = `${prefix}-inspect-${now}`;
     const inspectApproval = await approveForCase(input.caseId, {
       action: "inspect-order",
@@ -105,6 +115,51 @@ export default defineAction({
 
     if (inspectApproval.outcome === "approved") {
       await leash.settle(inspectRequestId);
+      inspectSucceeded = true;
+    }
+
+    // If inspect fails, the resolution cannot proceed honestly
+    if (!inspectSucceeded) {
+      const failStatus = "failed";
+      await db.update(supportCases)
+        .set({ 
+          status: failStatus,
+          resolvedAt: Date.now(),
+          resolutionRefundCents: 0,
+          resolutionReason: "Required action 'inspect-order' failed: " + inspectApproval.decision?.message,
+        })
+        .where(eq(supportCases.id, input.caseId));
+
+      await db.insert(contractEvents).values({
+        id: `ev_${crypto.randomUUID()}`,
+        contractId,
+        type: "CASE_RESOLVED",
+        action: "close-case",
+        caller,
+        amountCents: 0,
+        code: "inspect_failed",
+        detail: JSON.stringify({
+          resolutionStatus: failStatus,
+          refundAmountCents: 0,
+          customerResponse: "",
+          resolutionReason: "Required action 'inspect-order' failed",
+          failedStep: "inspect-order",
+        }),
+        createdAt: Date.now(),
+      });
+
+      return {
+        ok: true,
+        caseId: input.caseId,
+        contractId,
+        resolution: {
+          status: failStatus,
+          refundAmountCents: 0,
+          customerResponse: "",
+          resolutionReason: "Required action 'inspect-order' failed",
+          steps: resolution,
+        },
+      };
     }
 
     // STEP 2: Determine resolution based on complaint and order
@@ -173,6 +228,7 @@ export default defineAction({
       if (refundApproval.outcome === "approved") {
         await leash.settle(refundRequestId);
         refundExecuted = true;
+        refundSucceeded = true;
         refundAmount = determinedRefundCents;
 
         // Record the refund event
@@ -192,23 +248,37 @@ export default defineAction({
           createdAt: Date.now(),
         });
       }
-    } else {
+    } else if (determinedRefundCents > 0) {
+      // Refund warranted but count exhausted
       resolution.push({
         step: "execute-refund",
         action: "issue-refund",
         requestId: `${prefix}-refund-skipped-${now}`,
         outcome: "rejected",
         details: {
-          reason: determinedRefundCents === 0 ? "No refund warranted" : "Refund count exhausted",
+          reason: "Refund count exhausted",
           determinedRefundCents,
           refundsUsed: contract.refundsUsed,
           maxRefunds: contract.maxRefunds,
         },
         timestamp: Date.now(),
       });
+    } else {
+      // No refund warranted
+      resolution.push({
+        step: "execute-refund",
+        action: "issue-refund",
+        requestId: `${prefix}-refund-skipped-${now}`,
+        outcome: "rejected",
+        details: {
+          reason: "No refund warranted",
+          determinedRefundCents: 0,
+        },
+        timestamp: Date.now(),
+      });
     }
 
-    // STEP 4: Draft customer response
+    // STEP 4: Draft customer response (REQUIRED for resolution)
     const responseRequestId = `${prefix}-response-${now}`;
     customerResponse = generateCustomerResponse(
       supportCase.customer,
@@ -238,11 +308,25 @@ export default defineAction({
 
     if (responseApproval.outcome === "approved") {
       await leash.settle(responseRequestId);
+      responseSucceeded = true;
     }
 
-    // STEP 5: Close case — persist resolution status on the case itself
+    // STEP 5: Determine honest resolution status
+    // Required actions: inspect-order, draft-response
+    // Refund is attempted but may be rejected by LEASH (that's enforcement working)
+    let resolutionStatus: string;
+    if (!responseSucceeded) {
+      resolutionStatus = "partial_response_failed";
+    } else if (determinedRefundCents > 0 && !refundSucceeded && contract.maxRefunds > contract.refundsUsed) {
+      // Refund was warranted and attempted but rejected (budget/count) - enforcement worked
+      resolutionStatus = "partial_refund_rejected";
+    } else if (refundExecuted) {
+      resolutionStatus = "resolved_with_refund";
+    } else {
+      resolutionStatus = "resolved_no_refund";
+    }
+
     const closeRequestId = `${prefix}-close-${now}`;
-    const resolutionStatus = refundExecuted ? "resolved_with_refund" : "resolved_no_refund";
 
     resolution.push({
       step: "close-case",
@@ -275,7 +359,7 @@ export default defineAction({
       action: "close-case",
       caller,
       amountCents: refundAmount,
-      code: null,
+      code: resolutionStatus.startsWith("partial_") ? resolutionStatus : null,
       detail: JSON.stringify({
         resolutionStatus,
         refundAmountCents: refundAmount,

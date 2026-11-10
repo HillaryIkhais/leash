@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
 import { useActionMutation, useActionQuery } from "@agent-native/core/client/use-action";
 import { useSetPageTitle } from "@agent-native/toolkit/app-shell";
@@ -83,6 +83,7 @@ export default function AutonomousResolution() {
   });
 
   const revoke = useActionMutation("revoke-contract", { onSettled: () => run.refetch() });
+  const testRefund = useActionMutation("issue-refund", { onSettled: () => run.refetch() });
 
   // Query for the run contract data
   const run = useActionQuery("get-run", { contractId: contractId || "" }, { 
@@ -124,7 +125,6 @@ export default function AutonomousResolution() {
   const testRevocation = async () => {
     if (!contractId || !c) return;
     // Try to execute a refund after revocation - should be rejected
-    const testRefund = useActionMutation("issue-refund", { onSettled: () => run.refetch() });
     await testRefund.mutateAsync({
       caseId: c.caseId,
       amountCents: 100,
@@ -319,7 +319,16 @@ export default function AutonomousResolution() {
             <div>
               <div className="text-xs text-white/40">Status</div>
               <div className="font-semibold text-emerald-300">
-                {resolution.status === "resolved_with_refund" ? "Resolved with Refund" : "Resolved (No Refund)"}
+                {(() => {
+                  switch (resolution.status) {
+                    case "resolved_with_refund": return "Resolved with Refund";
+                    case "resolved_no_refund": return "Resolved (No Refund)";
+                    case "partial_refund_rejected": return "Refund Rejected by LEASH (Enforcement)";
+                    case "partial_response_failed": return "Partial — Response Failed";
+                    case "failed": return "Failed — Required Action Failed";
+                    default: return resolution.status;
+                  }
+                })()}
               </div>
             </div>
             <div>
@@ -341,7 +350,7 @@ export default function AutonomousResolution() {
       )}
 
       {/* Case Status from DB */}
-      {case_ && (case_.status === "resolved_with_refund" || case_.status === "resolved_no_refund") && (
+      {case_ && case_.status && (
         <section className="rounded-2xl border border-sky-500/20 bg-sky-950/20 p-4">
           <h2 className="mb-3 text-[11px] uppercase tracking-[0.25em] text-sky-400">Case Record</h2>
           <div className="grid gap-2 sm:grid-cols-3 text-sm">

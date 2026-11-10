@@ -83,8 +83,12 @@ the wall).
 
 Actions run through any dispatch surface (UI, agent tool, HTTP, MCP) hit the
 same gate. The caller string is resolved from framework-verified context:
-`frontend`, `root-agent`, `subagent:<label>:d<depth>`, or
-`mcp:<client-name>` — and lands in every receipt.
+`frontend`, `root-agent`, `mcp:<client-name>`, `automation`, `tool`, `http`,
+or `cli`. The framework provides `delegationDepth` (number) but NO label for
+child agents. LEASH's delegation model is a TRUST MODEL: child delegates are
+registered in `contractDelegates`, and IF a caller provides `subagent:<label>`
+in `ctx.caller`, the enforcer verifies it against the registry. The framework
+does NOT automatically bind `delegationDepth` to a registered label.
 
 ## The receipts
 
@@ -102,9 +106,12 @@ conditional-update bridge semantics; no database needed):
 pnpm demo
 ```
 
-What you will see — a child agent `subagent:helper` (full envelope) and a
-second child `subagent:reader` (reads only) under a $25.00 / 2-refund /
-10-minute contract:
+What you will see — a root agent and two registered delegates (`helper` with
+full envelope, `reader` with reads-only) under a $25.00 / 2-refund /
+10-minute contract. NOTE: The framework does not provide verified child agent
+identity; the demo uses caller strings "subagent:helper" and "subagent:reader"
+which the enforcer checks against the contractDelegates registry. This is a
+trust model — the framework does not bind delegationDepth to these labels.
 
 1. Allowed refund of $18.00 → `approved`, $7.00 remaining
 2. `change-account-owner` → rejected `forbidden_action` (on the denial list)
@@ -112,7 +119,7 @@ second child `subagent:reader` (reads only) under a $25.00 / 2-refund /
 4. Another refund of $7.01 → rejected `budget_exceeded` (`total $25.01 exceeds the $25.00 ceiling`)
 5. Replaying the first requestId → `replayed`, no double execution
 6. A $7.00 refund whose side effect fails → `released`, allowance returned
-7. The `reader` child attempts a refund → rejected `delegate_envelope_violation` (its own envelope, enforced live)
+7. The `reader` delegate attempts a refund → rejected `delegate_envelope_violation` (its registered envelope, enforced live)
 8. The parent revokes; the next call → rejected `contract_revoked`
 9. The receipt ledger prints the whole story
 
@@ -190,7 +197,7 @@ app/routes/resolve.$caseId.tsx       autonomous resolution: live agent execution
 ## Limitations (honesty table)
 
 - Demo refunds are recorded side effects; no payment rail is wired. Customer responses explicitly state "no actual payment was processed."
-- Child-agent identity is registered in `contractDelegates` and verified at execution time via the framework's delegation context. The enforcer extracts the label from `ctx.caller` (`subagent:<label>`) and validates it against the registry. Caller-supplied `childLabel` in action inputs is ignored.
+- Child-agent identity is registered in `contractDelegates` but the framework does NOT verify it at execution time. The framework provides `delegationDepth` but NO label. LEASH's enforcer only validates a `subagent:<label>` caller string IF the application provides it. This is a TRUST MODEL, not a cryptographic guarantee. Caller-supplied `childLabel` in action inputs is ignored.
 - The events ledger is append-only by code convention (enforcement code never updates it); a raw SQL writer could still mutate rows.
 - Double-spend protection lives in the conditional single-statement UPDATEs, not in transaction isolation — correct under PGlite and Postgres/Neon, but a driver that fragments statements would need transactions.
 - `mcp:<label>` caller attribution relies on the framework's MCP dispatch context.

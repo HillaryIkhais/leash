@@ -4,9 +4,13 @@
  * envelope checked against its parent's envelope. Widenings are rejected —
  * a child can only ever be narrower than its parent on every axis.
  *
- * IDENTITY: The childLabel registered here becomes the VERIFIED identity
- * used by the enforcer. The framework's delegation context maps to this label
- * at execution time. Caller-supplied childLabel in action inputs is IGNORED.
+ * IDENTITY (HONEST MODEL):
+ * The childLabel registered here is stored in contractDelegates.
+ * HOWEVER: The Agent-Native framework does NOT automatically verify this
+ * identity at execution time. The framework provides delegationDepth but
+ * NO label in ctx.caller. For the enforcer to verify identity, the
+ * application must set ctx.caller = "subagent:<label>" when spawning
+ * the child agent. This is a TRUST MODEL, not a cryptographic guarantee.
  *
  * AUTHORIZATION: Only the parent delegate (or root agent for empty parentLabel)
  * may register child delegates. The caller must match the parent's registered
