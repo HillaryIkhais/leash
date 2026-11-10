@@ -5,5 +5,10 @@
   "buildCommand": "pnpm migrate:production && pnpm build",
   "env": {
     "AGENT_NATIVE_VERCEL_CRON_SCHEDULE": "0 9 * * *"
+  },
+  "build": {
+    "env": {
+      "AGENT_NATIVE_VERCEL_CRON_SCHEDULE": "0 9 * * *"
+    }
   }
 }
