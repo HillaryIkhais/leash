@@ -43,7 +43,8 @@ export default function RunLauncher() {
       forbiddenActions: ["change-account-owner"],
       minutes,
     });
-    navigate(`/run/${issued.contractId}`);
+    // Navigate to the autonomous resolution experience
+    navigate(`/resolve/${opened.caseId}`);
   };
 
   const row = (
@@ -107,7 +108,7 @@ export default function RunLauncher() {
           disabled={open.isPending || issue.isPending}
           className="rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-6 py-3 font-semibold text-emerald-200 transition hover:bg-emerald-900/50 disabled:opacity-40"
         >
-          {open.isPending || issue.isPending ? "…" : "Issue contract → open control room"}
+          {open.isPending || issue.isPending ? "…" : "Issue contract → start autonomous resolution"}
         </button>
         {(open.isError || issue.isError) && (
           <div className="mt-3 rounded-xl border border-rose-500/40 bg-rose-950/30 p-3 text-sm text-rose-200">

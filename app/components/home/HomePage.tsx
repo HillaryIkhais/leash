@@ -106,6 +106,28 @@ function ContractCard() {
         Every agent, child agent, and connected MCP client that touches this
         case inherits exactly this envelope — until the human ends it.
       </div>
+      
+      {/* Authority Visualization */}
+      <div className="border-t border-white/10 px-5 py-4">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-3">Authority Flow</div>
+        <div className="space-y-2 font-mono text-[11px]">
+          <div className="flex items-center gap-2 text-emerald-400">
+            <span className="size-2 rounded-full bg-emerald-400" /> Human issues contract
+          </div>
+          <div className="flex items-center gap-2 text-white/50 ml-3 border-l border-white/10 pl-3">
+            <span className="size-2 rounded-full bg-sky-400" /> Root agent executes
+          </div>
+          <div className="flex items-center gap-2 text-white/50 ml-3 border-l border-white/10 pl-3">
+            <span className="size-2 rounded-full bg-purple-400" /> Child agents (attenuated)
+          </div>
+          <div className="flex items-center gap-2 text-white/50 ml-3 border-l border-white/10 pl-3">
+            <span className="size-2 rounded-full bg-amber-400" /> MCP clients (bound by contract)
+          </div>
+          <div className="flex items-center gap-2 text-rose-400 ml-3 border-l border-rose-500/30 pl-3">
+            <span className="size-2 rounded-full bg-rose-400" /> Revocation kills all
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -168,7 +190,7 @@ export default function HomePage() {
         <footer className="max-w-2xl text-center">
           <p className="text-xs leading-relaxed text-white/35">
             Demo refunds are simulated — the enforcement is not. Child-agent
-            identity is declared, not cryptographic. The events ledger is
+            identity is now server-verified via contractDelegates registry. The events ledger is
             append-only by convention. Expiry is decided by the server clock,
             never the request payload.
           </p>

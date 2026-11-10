@@ -97,6 +97,91 @@ export default function RunControl() {
 
   return (
     <div className="dark mx-auto flex h-full max-w-6xl flex-col gap-6 overflow-y-auto bg-background p-6 text-foreground">
+      {/* Authority Contract Visualization */}
+      {c && (
+        <div className="relative rounded-2xl border border-emerald-500/25 bg-zinc-950/80 shadow-[0_0_60px_-15px_rgba(16,185,129,0.15)] overflow-hidden">
+          <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
+            <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-white/40">
+              active run contract
+            </span>
+            <span className={`flex items-center gap-2 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${STATUS_STYLES[c.status] ?? ""}`}>
+              <span className="relative inline-flex size-2">
+                <span className="absolute inline-flex h-full w-full rounded-full opacity-60 motion-safe:animate-ping" style={{ backgroundColor: c.status === "ACTIVE" ? "#34d399" : c.status === "REVOKED" ? "#fb7185" : "#fbbf24" }} />
+                <span className="relative inline-flex size-2 rounded-full" style={{ backgroundColor: c.status === "ACTIVE" ? "#34d399" : c.status === "REVOKED" ? "#fb7185" : "#fbbf24" }} />
+              </span>
+              {c.status}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-3 divide-x divide-white/10 border-b border-white/10 px-5 py-4">
+            {[
+              { label: "refund ceiling", value: fmt(c.budgetCents) },
+              { label: "max refunds", value: `${c.maxRefunds}` },
+              { label: "lifetime", value: secondsLeft != null ? `${mm}:${ss}` : "expired" },
+            ].map((s) => (
+              <div key={s.label} className="text-center">
+                <div className="font-mono text-2xl font-semibold tabular-nums text-white">{s.value}</div>
+                <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-white/40">{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 px-5 py-3">
+            {c.permittedActions.map((a: string) => (
+              <span
+                key={a}
+                className="rounded-full border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-1 font-mono text-[11px] text-emerald-300"
+              >
+                {a}
+              </span>
+            ))}
+            {c.forbiddenActions.map((a: string) => (
+              <span
+                key={a}
+                className="rounded-full border border-rose-500/40 bg-rose-950/40 px-2.5 py-1 font-mono text-[11px] text-rose-300 line-through decoration-rose-400/60"
+              >
+                {a}
+              </span>
+            ))}
+          </div>
+
+          {/* Budget Progress */}
+          <div className="border-t border-white/10 px-5 py-4">
+            <div className="flex justify-between text-xs text-white/50 mb-2">
+              <span>spent {fmt(c.spentCents)} of {fmt(c.budgetCents)} · refunds {c.refundsUsed}/{c.maxRefunds}</span>
+              <span>{height}% consumed</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${height}%`, background: "linear-gradient(90deg,#34d399,#fbbf24,#fb7185)" }}
+              />
+            </div>
+          </div>
+
+          {/* Authority Flow Visualization */}
+          <div className="border-t border-white/10 px-5 py-3">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-2">Authority Flow</div>
+            <div className="space-y-1.5 font-mono text-[11px]">
+              <div className="flex items-center gap-2 text-emerald-400">
+                <span className="size-1.5 rounded-full bg-emerald-400" /> Human issued contract
+              </div>
+              <div className="flex items-center gap-2 text-white/60 ml-2 border-l border-white/10 pl-2">
+                <span className="size-1.5 rounded-full bg-sky-400" /> Root agent (full envelope)
+              </div>
+              {delegates.length > 0 && delegates.map((d) => (
+                <div key={d.label} className="flex items-center gap-2 text-white/50 ml-2 border-l border-white/10 pl-2">
+                  <span className="size-1.5 rounded-full bg-purple-400" /> Child: {d.label} (attenuated)
+                </div>
+              ))}
+              <div className="flex items-center gap-2 text-rose-400 ml-2 border-l border-rose-500/30 pl-2">
+                <span className="size-1.5 rounded-full bg-rose-400" /> Revocation terminates all
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* header */}
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
@@ -123,30 +208,6 @@ export default function RunControl() {
           )}
         </div>
       </header>
-
-      {run.isError && (
-        <div className="rounded-xl border border-rose-500/40 bg-rose-950/40 p-4 text-sm text-rose-200">
-          Failed to load run: {errText(run.error)}
-        </div>
-      )}
-
-      {/* budget bar */}
-      {c && (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-          <div className="mb-2 flex justify-between text-xs text-white/50">
-            <span>
-              spent {fmt(c.spentCents)} · refunds {c.refundsUsed}/{c.maxRefunds}
-            </span>
-            <span>{height}% of ceiling</span>
-          </div>
-          <div className="h-3 overflow-hidden rounded-full bg-white/10">
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{ width: `${height}%`, background: "linear-gradient(90deg,#34d399,#fbbf24,#fb7185)" }}
-            />
-          </div>
-        </div>
-      )}
 
       {/* beats */}
       <section>
@@ -201,7 +262,6 @@ export default function RunControl() {
                 caseId: c?.caseId ?? contractId,
                 amountCents: 100,
                 requestId: newRequestId("child-refund"),
-                childLabel: "ops-child",
               }),
             "border-rose-500/30 bg-rose-950/30 text-rose-200",
             "child outside envelope · REJECTED",

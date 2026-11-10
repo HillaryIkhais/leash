@@ -361,10 +361,10 @@ test("22 child within its envelope is admitted and its label lands on the receip
   db.seedDelegate("ct_1", "reader", { permittedActions: ["inspect-order"], maxRefunds: 0, budgetCapCents: 0 });
   const leash = makeEnforcer(db);
 
-  const a = await leash.approve("ct_1", REQ({ action: "inspect-order", requestId: "rq-ro2", amountCents: 0 }), { caller: "subagent:reader:d2" });
+  const a = await leash.approve("ct_1", REQ({ action: "inspect-order", requestId: "rq-ro2", amountCents: 0 }), { caller: "subagent:reader" });
   assert.equal(a.outcome, "approved");
   const ex = db.eventsOf("ct_1", EVENT_TYPE.EXECUTED)[0];
-  assert.equal(ex.caller, "subagent:reader:d2");
+  assert.equal(ex.caller, "subagent:reader");
   const res = db.reservations.get("rq-ro2")!;
-  assert.equal(res.delegateLabel, "reader:d2");
+  assert.equal(res.delegateLabel, "reader");
 });

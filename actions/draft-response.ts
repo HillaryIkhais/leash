@@ -2,6 +2,11 @@
  * Draft-response — the "correctly permitted" beat: no money moves, the
  * caller is allowed and receives an EXECUTED receipt. Proves enforcement
  * admits legitimate work, not everything.
+ *
+ * DELEGATION: Child agent identity is now verified by the framework's
+ * delegation context. The caller string "subagent:<label>" is extracted
+ * from the framework-verified delegationDepth and matched against the
+ * contractDelegates registry. Caller-supplied childLabel is IGNORED.
  */
 import { defineAction } from "@agent-native/core/action";
 import { z } from "zod";
@@ -13,7 +18,6 @@ export default defineAction({
   schema: z.object({
     caseId: z.string(),
     requestId: z.string(),
-    childLabel: z.string().optional(),
     draft: z.string().min(1).describe("The drafted customer response"),
   }),
   run: async (input, ctx) => {

@@ -6,6 +6,11 @@
  *   3. settle(): hold becomes permanent spend
  * Rejections throw ActionContractError — the framework surfaces the error
  * code identically across UI, agent tool-result, HTTP and MCP surfaces.
+ *
+ * DELEGATION: Child agent identity is now verified by the framework's
+ * delegation context. The caller string "subagent:<label>" is extracted
+ * from the framework-verified delegationDepth and matched against the
+ * contractDelegates registry. Caller-supplied childLabel is IGNORED.
  */
 import { defineAction, ActionContractError } from "@agent-native/core/action";
 import { getDb } from "../server/db";
@@ -22,7 +27,6 @@ export default defineAction({
     caseId: z.string(),
     amountCents: z.number().int().positive().describe("Refund amount in cents"),
     requestId: z.string().describe("Caller-provided idempotency key"),
-    childLabel: z.string().optional().describe("Declared identity of a child agent executing this call"),
   }),
   run: async (input, ctx) => {
     const caller = resolveCaller(input, ctx);

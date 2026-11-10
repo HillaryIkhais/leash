@@ -56,6 +56,7 @@ function report(result: ApproveResult): string {
 }
 
 banner("1", "child agent performs an ALLOWED action");
+// Caller is now "subagent:helper" - verified label from contractDelegates
 const ok = await approve("rq-01", "issue-refund", "subagent:helper", 1800, true);
 console.log("  decision:", report(ok));
 await leash.settle("rq-01");
@@ -83,7 +84,8 @@ const released = await leash.release("rq-06");
 console.log("  side effect failed -> released:", released, "| allowance returned, RELEASED receipt written");
 
 banner("7", "reader child acts OUTSIDE ITS OWN envelope (attenuation, enforced live)");
-const envelope = await approve("rq-07", "issue-refund", "subagent:reader:d2", 100, true);
+// Reader delegate only has inspect-order, no refunds, no budget
+const envelope = await approve("rq-07", "issue-refund", "subagent:reader", 100, true);
 console.log("  decision:", report(envelope));
 
 banner("8", "parent REVOKES the delegation; further use is rejected");

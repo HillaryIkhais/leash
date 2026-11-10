@@ -3,6 +3,10 @@
  * The root agent (or a child) spawns a child agent registration with an
  * envelope checked against its parent's envelope. Widenings are rejected —
  * a child can only ever be narrower than its parent on every axis.
+ *
+ * IDENTITY: The childLabel registered here becomes the VERIFIED identity
+ * used by the enforcer. The framework's delegationDepth maps to this label
+ * at execution time. Caller-supplied childLabel in action inputs is IGNORED.
  */
 import { defineAction } from "@agent-native/core/action";
 import { getDb } from "../server/db";
@@ -15,11 +19,11 @@ import { eq, and } from "drizzle-orm";
 
 export default defineAction({
   description:
-    "Register a child agent inside a run contract with an attenuated envelope. The child's action set, refund count and budget cap must fit inside the parent envelope.",
+    "Register a child agent inside a run contract with an attenuated envelope. The child's action set, refund count and budget cap must fit inside the parent envelope. The childLabel becomes the verified identity for enforcement.",
   schema: z.object({
     contractId: z.string(),
     parentLabel: z.string().describe("Label of the parent delegate; empty means the root agent"),
-    childLabel: z.string().min(1).describe("Label for the new child agent"),
+    childLabel: z.string().min(1).describe("Label for the new child agent (becomes verified identity)"),
     permittedActions: z.array(z.string()).min(1),
     maxRefunds: z.number().int().min(0),
     budgetCapCents: z.number().int().min(0),

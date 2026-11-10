@@ -14,6 +14,15 @@
  *     count first, then money; if money is lost, count is released.
  *   - after approval the caller performs the side effect; then either
  *     settle() (kept) or release() (side effect failed, allowance back).
+ *
+ * DELEGATION IDENTITY: Child agent identity is now verified against the
+ * contractDelegates registry. The caller string format is:
+ *   - "subagent:<label>" for verified delegates (label from registry)
+ *   - "root-agent" for the root agent
+ *   - "mcp:<name>" for MCP clients
+ *   - "frontend" for UI callers
+ * The enforcer extracts the label and verifies it exists in contractDelegates.
+ * Caller-supplied childLabel in action inputs is IGNORED for identity.
  */
 
 import {
@@ -138,40 +147,40 @@ export class LeashEnforcer {
     // enforcer's clock alone, never by the request payload.
     const decision = evaluate(snap, { ...req, now });
 
+    // Extract verified delegate label from caller string.
+    // Format: "subagent:<label>" where label MUST be registered in contractDelegates.
+    // Caller-supplied childLabel in action inputs is IGNORED.
+    const delegateLabel = this.extractVerifiedDelegateLabel(ctx.caller);
+    
     const reservation: ReservationRow = {
       requestId: req.requestId,
       contractId,
-      delegateLabel: ctx.caller.startsWith("subagent:")
-        ? ctx.caller.slice("subagent:".length)
-        : null,
+      delegateLabel,
       action: req.action,
       amountCents: req.amountCents ?? 0,
       outcome: decision.ok ? "APPROVED" : `REJECTED:${decision.code}`,
       status: RESERVATION_STATUS.HELD,
     };
 
-    // 2.5 delegate envelope binding. A declared child acts inside its
+    // 2.5 delegate envelope binding. A verified child acts inside its
     // registered envelope, not just the contract's: execution-time
     // attenuation, fail-closed for unknown labels. This is what makes the
     // delegation envelope binding rather than decorative. Runs only when
     // the contract gate passed — the contract's own rejection code wins.
-    const childLabel = ctx.caller.startsWith("subagent:")
-      ? ctx.caller.slice("subagent:".length).replace(/:d\d+$/, "")
-      : null;
     let delegateRow: DelegateRow | undefined;
-    if (childLabel && decision.ok) {
-      delegateRow = await this.db.queryDelegate(contractId, childLabel);
+    if (delegateLabel && decision.ok) {
+      delegateRow = await this.db.queryDelegate(contractId, delegateLabel);
       let envelopeViolation: string | null = null;
       if (!delegateRow) {
-        envelopeViolation = `declared child '${childLabel}' is not registered on this contract`;
+        envelopeViolation = `verified child '${delegateLabel}' is not registered on this contract`;
       } else {
         const permitted = JSON.parse(delegateRow.permittedActions) as string[];
         if (!permitted.includes(req.action)) {
-          envelopeViolation = `${req.action} is not in child '${childLabel}'s delegated envelope`;
+          envelopeViolation = `${req.action} is not in child '${delegateLabel}'s delegated envelope`;
         } else if ((req.amountCents ?? 0) > delegateRow.budgetCapCents) {
-          envelopeViolation = `amount $${fmtCents(req.amountCents ?? 0)} exceeds child '${childLabel}'s cap $${fmtCents(delegateRow.budgetCapCents)}`;
+          envelopeViolation = `amount $${fmtCents(req.amountCents ?? 0)} exceeds child '${delegateLabel}'s cap $${fmtCents(delegateRow.budgetCapCents)}`;
         } else if (req.refund && delegateRow.maxRefunds <= 0) {
-          envelopeViolation = `child '${childLabel}' was delegated no refunds`;
+          envelopeViolation = `child '${delegateLabel}' was delegated no refunds`;
         }
       }
       if (envelopeViolation) {
@@ -185,7 +194,7 @@ export class LeashEnforcer {
           caller: ctx.caller,
           amountCents: req.amountCents ?? 0,
           code: delegateRow ? "delegate_envelope_violation" : "delegate_not_found",
-          detail: JSON.stringify({ message: envelopeViolation, child: childLabel }),
+          detail: JSON.stringify({ message: envelopeViolation, child: delegateLabel }),
           createdAt: now,
         });
         return {
@@ -284,6 +293,20 @@ export class LeashEnforcer {
       createdAt: now,
     });
     return { outcome: "approved", decision, receiptId: req.requestId };
+  }
+
+  /**
+   * Extract the verified delegate label from the caller string.
+   * Expected format: "subagent:<label>" where label is from contractDelegates registry.
+   * Returns null for root-agent, mcp, frontend, or malformed callers.
+   */
+  private extractVerifiedDelegateLabel(caller: string): string | null {
+    if (caller.startsWith("subagent:")) {
+      // Format: "subagent:<label>" or "subagent:<label>:d<depth>"
+      const parts = caller.slice("subagent:".length).split(":d");
+      return parts[0] || null;
+    }
+    return null;
   }
 
   /** Side effect succeeded — the hold becomes permanent spend. */
