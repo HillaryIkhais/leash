@@ -62,7 +62,7 @@ export default function RunLauncher() {
   );
 
   return (
-    <div className="mx-auto flex h-full max-w-4xl flex-col gap-8 overflow-y-auto p-6">
+    <div className="dark mx-auto flex h-full max-w-4xl flex-col gap-8 overflow-y-auto bg-background p-6 text-foreground">
       <header>
         <div className="text-[11px] uppercase tracking-[0.25em] text-white/40">leash · issue authority</div>
         <h1 className="text-2xl font-semibold">Write the run contract</h1>

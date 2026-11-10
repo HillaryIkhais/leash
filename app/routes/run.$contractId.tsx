@@ -96,7 +96,7 @@ export default function RunControl() {
   );
 
   return (
-    <div className="mx-auto flex h-full max-w-6xl flex-col gap-6 overflow-y-auto p-6">
+    <div className="dark mx-auto flex h-full max-w-6xl flex-col gap-6 overflow-y-auto bg-background p-6 text-foreground">
       {/* header */}
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>

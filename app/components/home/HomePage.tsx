@@ -1,249 +1,178 @@
-import {
-  markAgentChatHomeHandoff,
-  navigateWithAgentChatViewTransition,
-} from "@agent-native/core/client/agent-chat";
-import { createAgentNativeAgentKitTransport } from "@agent-native/core/client/agentkit-chat/transport";
-import { useT } from "@agent-native/core/client/i18n";
-import { AgentKitComposer } from "@agent-native/toolkit/app/agentkit/react/components";
-import { useAgentKitControl } from "@agent-native/toolkit/app/agentkit/react/context";
-import { CoreComposerRuntimeProvider } from "@agent-native/toolkit/app/chat/agentkit-chat/composer";
-import { CoreAgentKitRoot } from "@agent-native/toolkit/app/chat/agentkit-chat/index";
-import { useRealtimeVoiceModeOptional } from "@agent-native/toolkit/app/chat/composer";
-import { WaveBackground } from "@agent-native/toolkit/app/shared";
-import { AgentNativeIcon } from "@agent-native/toolkit/app/shared";
-import {
-  IconBook,
-  IconBrandDiscord,
-  IconBrandGithub,
-  IconUsers,
-} from "@tabler/icons-react";
-import { useState, type ReactNode } from "react";
-import { useNavigate } from "react-router";
+import { Link } from "react-router";
 
-import { useChatComposerMenuItems } from "@/components/ChatComposerContext";
-import { Button } from "@/components/ui/button";
-import {
-  Item,
-  ItemContent,
-  ItemFooter,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
-import { Separator } from "@/components/ui/separator";
-import { getChatHomeThreadId } from "@/lib/chat-home-thread";
-import {
-  chatHandoffComposerOptions,
-  chatThreadPath,
-  type ChatInitialComposerOptions,
-  type ChatRouteState,
-} from "@/lib/chat-paths";
-import { TAB_ID } from "@/lib/tab-id";
+const KILLER_LINE =
+  "The framework decides whether a caller may call an action. LEASH decides whether this run may continue.";
 
-const DOCS_URL = "https://www.agent-native.com/docs";
-const GITHUB_URL = "https://github.com/BuilderIO/agent-native";
-const DISCORD_URL = "https://discord.gg/qm82StQ2NC";
+const ENVELOPE = {
+  ceiling: "$25.00",
+  maxRefunds: "1",
+  lifetime: "10:00",
+  permitted: ["inspect-order", "issue-refund", "draft-response"],
+  forbidden: ["change-account-owner"],
+};
 
-/**
- * The same AgentKit composer the chat page uses, so Connect AI and the model
- * picker look the way they will in chat. Submitting hands the prompt to the
- * full chat page instead of running it here, and voice chat continues there.
- */
-function HomeAgentComposer() {
-  const navigate = useNavigate();
-  const realtimeVoice = useRealtimeVoiceModeOptional();
-  const [threadId] = useState(getChatHomeThreadId);
-  const [transport] = useState(() =>
-    createAgentNativeAgentKitTransport({
-      browserTabId: TAB_ID,
-      surface: "app",
-      adapter: { textFormat: "markdown" },
-    }),
-  );
+const PROPERTIES: Array<{ n: string; title: string; body: string }> = [
+  {
+    n: "01",
+    title: "Atomic budget reservation",
+    body: "Concurrent calls cannot both spend the last allowance — one cent is indivisible.",
+  },
+  {
+    n: "02",
+    title: "Delegation attenuation",
+    body: "A child envelope is always narrower than its parent. Widening is a recorded rejection.",
+  },
+  {
+    n: "03",
+    title: "Run-wide enforcement",
+    body: "One gate for UI, agent, HTTP, and MCP callers. No surface slips through.",
+  },
+  {
+    n: "04",
+    title: "Immediate revocation",
+    body: "The contract is re-read from the database at every evaluation. No grace for cached tokens.",
+  },
+  {
+    n: "05",
+    title: "Idempotency",
+    body: "Replaying a requestId can never double-execute. Networks retry; LEASH does not double-pay.",
+  },
+  {
+    n: "06",
+    title: "Immutable receipts",
+    body: "Executed, replayed, rejected, released, revoked — the ledger distinguishes them forever.",
+  },
+];
 
-  function openChat(
-    message: string,
-    options: ChatInitialComposerOptions,
-    onLocalSubmit?: () => void,
-  ) {
-    const state: ChatRouteState = {
-      initialMessage: message,
-      initialComposerOptions: options,
-    };
-    markAgentChatHomeHandoff("chat");
-    navigateWithAgentChatViewTransition(navigate, chatThreadPath(threadId), {
-      state,
-    });
-    onLocalSubmit?.();
-  }
-
-  function startVoiceChat() {
-    // Home shows no transcript, so the session is bound to the thread it
-    // opens rather than to whichever thread is on screen when it starts.
-    void realtimeVoice?.start({ threadId });
-    markAgentChatHomeHandoff("chat");
-    navigateWithAgentChatViewTransition(navigate, chatThreadPath(threadId));
-  }
-
+function ActiveDot() {
   return (
-    <div
-      className="agentkit-tokens w-full max-w-[calc(var(--agent-kit-conversation-max-width,47rem)-2rem)] text-start"
-      data-agentkit-composer-size="large"
-    >
-      <CoreComposerRuntimeProvider>
-        <CoreAgentKitRoot
-          transport={transport}
-          clientOptions={{ transportOwnership: "owned" }}
-          threadId={threadId}
-        >
-          <HomeAgentComposerInput
-            threadId={threadId}
-            onSubmit={openChat}
-            onVoiceChatStart={startVoiceChat}
-          />
-        </CoreAgentKitRoot>
-      </CoreComposerRuntimeProvider>
+    <span className="relative flex size-2">
+      <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 motion-safe:animate-ping" />
+      <span className="relative inline-flex size-2 rounded-full bg-emerald-400" />
+    </span>
+  );
+}
+
+function ContractCard() {
+  return (
+    <div className="relative w-full max-w-md rounded-2xl border border-emerald-500/25 bg-zinc-950/80 shadow-[0_0_60px_-15px_rgba(16,185,129,0.25)]">
+      <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
+        <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-white/40">
+          run contract
+        </span>
+        <span className="flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-950/50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
+          <ActiveDot />
+          ACTIVE
+        </span>
+      </div>
+
+      <div className="grid grid-cols-3 divide-x divide-white/10 border-b border-white/10">
+        {[
+          { label: "refund ceiling", value: ENVELOPE.ceiling },
+          { label: "max refunds", value: ENVELOPE.maxRefunds },
+          { label: "lifetime", value: ENVELOPE.lifetime },
+        ].map((s) => (
+          <div key={s.label} className="px-4 py-4 text-center sm:px-5">
+            <div className="font-mono text-2xl font-semibold tabular-nums text-white sm:text-3xl">
+              {s.value}
+            </div>
+            <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-white/40">
+              {s.label}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 px-5 py-4">
+        {ENVELOPE.permitted.map((a) => (
+          <span
+            key={a}
+            className="rounded-full border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-1 font-mono text-[11px] text-emerald-300"
+          >
+            {a}
+          </span>
+        ))}
+        {ENVELOPE.forbidden.map((a) => (
+          <span
+            key={a}
+            className="rounded-full border border-rose-500/40 bg-rose-950/40 px-2.5 py-1 font-mono text-[11px] text-rose-300 line-through decoration-rose-400/60"
+          >
+            {a}
+          </span>
+        ))}
+      </div>
+
+      <div className="border-t border-dashed border-white/15 px-5 py-3 text-[11px] leading-relaxed text-white/40">
+        Every agent, child agent, and connected MCP client that touches this
+        case inherits exactly this envelope — until the human ends it.
+      </div>
     </div>
   );
 }
 
-function HomeAgentComposerInput({
-  threadId,
-  onSubmit,
-  onVoiceChatStart,
-}: {
-  threadId: string;
-  onSubmit: (
-    text: string,
-    options: ChatInitialComposerOptions,
-    onLocalSubmit?: () => void,
-  ) => void;
-  onVoiceChatStart: () => void;
-}) {
-  const t = useT();
-  const control = useAgentKitControl(threadId);
-  const contextMenuItems = useChatComposerMenuItems();
-
-  return (
-    <AgentKitComposer
-      threadId={threadId}
-      requireAgentEngine
-      placeholder={t("chat.composerPlaceholder")}
-      plusMenuMode="full"
-      contextMenuItems={contextMenuItems}
-      voiceEnabled
-      onVoiceChatStart={onVoiceChatStart}
-      onSubmit={async (text, files, references, options) => {
-        const uploadedAttachments = files.length
-          ? await control.uploadFiles(
-              files.map((file) => ({
-                name: file.name,
-                mediaType: file.type || "application/octet-stream",
-                size: file.size,
-                body: file,
-              })),
-            )
-          : [];
-        onSubmit(
-          text,
-          chatHandoffComposerOptions(options, {
-            references,
-            ...(uploadedAttachments.length ? { uploadedAttachments } : {}),
-          }),
-          options.onLocalSubmit,
-        );
-      }}
-    />
-  );
-}
-
-function ResourceLink({
-  href,
-  icon,
-  children,
-}: {
-  href: string;
-  icon?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <Button asChild variant="outline" size="sm">
-      <a href={href} target="_blank" rel="noreferrer">
-        {icon}
-        {children}
-      </a>
-    </Button>
-  );
-}
-
-function ResourceColumn({
-  icon,
-  title,
-  children,
-}: {
-  icon: ReactNode;
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <Item asChild className="content-start px-6 py-8 sm:px-10">
-      <section>
-        <ItemMedia variant="icon">{icon}</ItemMedia>
-        <ItemContent>
-          <ItemTitle role="heading" aria-level={2}>
-            {title}
-          </ItemTitle>
-        </ItemContent>
-        <ItemFooter className="flex-wrap justify-start">{children}</ItemFooter>
-      </section>
-    </Item>
-  );
-}
-
 export default function HomePage() {
-  const t = useT();
-
   return (
-    <div className="flex min-h-full flex-col">
-      <section className="relative isolate flex flex-1 flex-col items-center justify-center gap-6 overflow-hidden px-4 py-16 text-center">
-        <WaveBackground
-          matchPageSurface
-          className="pointer-events-none absolute inset-0 -z-10"
-        />
-        <AgentNativeIcon
-          aria-hidden="true"
-          className="h-8 w-14 text-foreground"
-        />
-        <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
-          {t("home.title")}
-        </h1>
-        <HomeAgentComposer />
-      </section>
+    <div className="dark min-h-full bg-background text-foreground">
+      <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-16 px-4 py-16 sm:py-24">
+        <section className="flex flex-col items-center gap-8 text-center">
+          <p className="font-mono text-[11px] uppercase tracking-[0.35em] text-emerald-400/80">
+            leash · authority contracts for autonomous work
+          </p>
+          <h1 className="max-w-3xl text-4xl font-semibold leading-tight tracking-tight sm:text-6xl">
+            Agents do the work.
+            <br />
+            <span className="text-emerald-400">The leash</span> decides how far
+            they can go.
+          </h1>
+          <p className="max-w-2xl text-base leading-relaxed text-white/60 sm:text-lg">
+            {KILLER_LINE}
+          </p>
+          <div className="flex flex-col items-center gap-3 sm:flex-row">
+            <Link
+              to="/run"
+              className="group inline-flex h-12 items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-950/50 px-7 text-base font-semibold text-emerald-200 transition hover:bg-emerald-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+            >
+              Issue a run contract
+              <span className="transition-transform group-hover:translate-x-1" aria-hidden="true">
+                →
+              </span>
+            </Link>
+            <span className="rounded-full border border-white/10 px-3 py-1 font-mono text-[11px] text-white/40">
+              43 tests · offline · no mocks in the gate
+            </span>
+          </div>
+        </section>
 
-      <Separator />
-      <div className="grid md:grid-cols-[1fr_auto_1fr]">
-        <ResourceColumn icon={<IconBook />} title={t("home.docsTitle")}>
-          <ResourceLink href={`${DOCS_URL}/getting-started`}>
-            {t("home.docsGettingStarted")}
-          </ResourceLink>
-          <ResourceLink href={`${DOCS_URL}/getting-started-actions`}>
-            {t("home.docsAddAction")}
-          </ResourceLink>
-          <ResourceLink href={`${DOCS_URL}/getting-started-pages`}>
-            {t("home.docsAddPage")}
-          </ResourceLink>
-          <ResourceLink href={`${DOCS_URL}/key-concepts`}>
-            {t("home.docsKeyConcepts")}
-          </ResourceLink>
-        </ResourceColumn>
-        <Separator orientation="vertical" className="hidden md:block" />
-        <ResourceColumn icon={<IconUsers />} title={t("home.communityTitle")}>
-          <ResourceLink href={GITHUB_URL} icon={<IconBrandGithub />}>
-            GitHub
-          </ResourceLink>
-          <ResourceLink href={DISCORD_URL} icon={<IconBrandDiscord />}>
-            Discord
-          </ResourceLink>
-        </ResourceColumn>
+        <ContractCard />
+
+        <section className="w-full">
+          <h2 className="mb-6 text-center font-mono text-[11px] uppercase tracking-[0.3em] text-white/40">
+            six properties, each enforced in the gate
+          </h2>
+          <div className="grid gap-px overflow-hidden rounded-2xl border border-white/10 bg-white/10 sm:grid-cols-2 lg:grid-cols-3">
+            {PROPERTIES.map((p) => (
+              <div
+                key={p.n}
+                className="flex flex-col gap-2 bg-zinc-950/90 p-6 text-left"
+              >
+                <span className="font-mono text-xs text-emerald-400/70">
+                  {p.n}
+                </span>
+                <h3 className="text-sm font-semibold text-white">{p.title}</h3>
+                <p className="text-sm leading-relaxed text-white/50">{p.body}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <footer className="max-w-2xl text-center">
+          <p className="text-xs leading-relaxed text-white/35">
+            Demo refunds are simulated — the enforcement is not. Child-agent
+            identity is declared, not cryptographic. The events ledger is
+            append-only by convention. Expiry is decided by the server clock,
+            never the request payload.
+          </p>
+        </footer>
       </div>
     </div>
   );

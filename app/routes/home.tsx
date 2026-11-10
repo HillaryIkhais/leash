@@ -1,9 +1,9 @@
 import HomePage from "@/components/home/HomePage";
 import { APP_TITLE } from "@/lib/app-config";
 
-const SEO_TITLE = `${APP_TITLE} - Open Source AI app starter with actions`;
+const SEO_TITLE = `${APP_TITLE} — Authority contracts for autonomous work`;
 const SEO_DESCRIPTION =
-  "Open Source starter for agent-native apps with durable chat, shared actions, UI state, tools, and a backend your agent can extend.";
+  "Issue a run contract: refund ceiling, permitted and forbidden actions, lifetime. Every agent, child agent, and MCP client touching the case inherits exactly this.";
 
 export function meta() {
   return [
