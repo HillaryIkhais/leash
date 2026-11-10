@@ -44,6 +44,17 @@ const PROPERTIES: Array<{ n: string; title: string; body: string }> = [
   },
 ];
 
+const ENFORCEMENT_BEATS = [
+  { label: "Allowed refund", desc: "Agent executes permitted action within budget", outcome: "EXECUTED", color: "emerald" },
+  { label: "Forbidden action", desc: "change-account-owner on denial list", outcome: "REJECTED:forbidden_action", color: "rose" },
+  { label: "Not permitted", desc: "Action outside permitted set", outcome: "REJECTED:action_not_permitted", color: "rose" },
+  { label: "Budget exceeded", desc: "Refund would exceed contract ceiling", outcome: "REJECTED:budget_exceeded", color: "amber" },
+  { label: "Replay blocked", desc: "Same requestId — no double execution", outcome: "REPLAYED", color: "fuchsia" },
+  { label: "Side effect failed", desc: "Allowance returned, RELEASED receipt", outcome: "RELEASED", color: "amber" },
+  { label: "Child outside envelope", desc: "Delegate exceeds its registered envelope", outcome: "REJECTED:delegate_envelope_violation", color: "rose" },
+  { label: "Revocation", desc: "Contract revoked — all calls rejected", outcome: "REJECTED:contract_revoked", color: "rose" },
+];
+
 function ActiveDot() {
   return (
     <span className="relative flex size-2">
@@ -107,7 +118,7 @@ function ContractCard() {
         case inherits exactly this envelope — until the human ends it.
       </div>
       
-      {/* Authority Visualization */}
+      {/* Authority Flow Visualization */}
       <div className="border-t border-white/10 px-5 py-4">
         <div className="text-[10px] uppercase tracking-[0.2em] text-white/40 mb-3">Authority Flow</div>
         <div className="space-y-2 font-mono text-[11px]">
@@ -129,6 +140,45 @@ function ContractCard() {
         </div>
       </div>
     </div>
+  );
+}
+
+function EnforcementBeats() {
+  const getColorClasses = (color: string) => {
+    switch (color) {
+      case "emerald": return "bg-emerald-950/30 border-emerald-500/30 text-emerald-300";
+      case "rose": return "bg-rose-950/30 border-rose-500/30 text-rose-300";
+      case "amber": return "bg-amber-950/30 border-amber-500/30 text-amber-300";
+      case "fuchsia": return "bg-fuchsia-950/30 border-fuchsia-500/30 text-fuchsia-300";
+      default: return "bg-white/10 border-white/20 text-white/70";
+    }
+  };
+
+  return (
+    <section className="w-full">
+      <h2 className="mb-6 text-center font-mono text-[11px] uppercase tracking-[0.3em] text-white/40">
+        enforcement beats — what the gate actually does
+      </h2>
+      <div className="grid gap-px overflow-hidden rounded-2xl border border-white/10 bg-white/10 sm:grid-cols-2 lg:grid-cols-4">
+        {ENFORCEMENT_BEATS.map((beat) => (
+          <div
+            key={beat.label}
+            className={`flex flex-col gap-2 p-6 text-left ${getColorClasses(beat.color)}`}
+          >
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs text-emerald-400/70">▸</span>
+              <h3 className="text-sm font-semibold text-white">{beat.label}</h3>
+            </div>
+            <p className="text-sm leading-relaxed text-white/60">{beat.desc}</p>
+            <div className="mt-2 flex items-center gap-2">
+              <span className="rounded-full border border-white/20 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-white/50">
+                {beat.outcome}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -160,12 +210,15 @@ export default function HomePage() {
               </span>
             </Link>
             <span className="rounded-full border border-white/10 px-3 py-1 font-mono text-[11px] text-white/40">
-              43 tests · offline · no mocks in the gate
+              50 tests · offline · no mocks in the gate
             </span>
           </div>
         </section>
 
-        <ContractCard />
+        <div className="w-full flex flex-col items-center gap-8">
+          <ContractCard />
+          <EnforcementBeats />
+        </div>
 
         <section className="w-full">
           <h2 className="mb-6 text-center font-mono text-[11px] uppercase tracking-[0.3em] text-white/40">
@@ -190,8 +243,8 @@ export default function HomePage() {
         <footer className="max-w-2xl text-center">
           <p className="text-xs leading-relaxed text-white/35">
             Demo refunds are simulated — the enforcement is not. Child-agent
-            identity is now server-verified via contractDelegates registry. The events ledger is
-            append-only by convention. Expiry is decided by the server clock,
+            identity is registered in contractDelegates but framework does NOT verify at execution time.
+            The events ledger is append-only by convention. Expiry is decided by the server clock,
             never the request payload.
           </p>
         </footer>

@@ -55,6 +55,14 @@ const STEP_ICONS: Record<string, string> = {
   "close-case": "✅",
 };
 
+const STEP_DESCRIPTIONS: Record<string, string> = {
+  "inspect-order": "Read the support case and order details",
+  "determine-resolution": "Analyze complaint, calculate refund amount",
+  "execute-refund": "Attempt refund through LEASH gate",
+  "draft-response": "Draft customer response",
+  "close-case": "Record resolution status",
+};
+
 function useClock() {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -124,7 +132,6 @@ export default function AutonomousResolution() {
   // Attempt an action after revocation to demonstrate enforcement
   const testRevocation = async () => {
     if (!contractId || !c) return;
-    // Try to execute a refund after revocation - should be rejected
     await testRefund.mutateAsync({
       caseId: c.caseId,
       amountCents: 100,
@@ -155,11 +162,14 @@ export default function AutonomousResolution() {
     const status: Record<string, "approved" | "rejected" | "replayed" | "skipped"> = {};
     for (const step of resolution.steps) {
       status[step.step] = step.outcome === "approved" ? "approved" : 
-                         step.outcome === "rejected" ? "rejected" :
-                         step.outcome === "replayed" ? "replayed" : "skipped";
+                           step.outcome === "rejected" ? "rejected" :
+                           step.outcome === "replayed" ? "replayed" : "skipped";
     }
     return status;
   }, [resolution]);
+
+  // Determine if this is the key enforcement demo (budget exceeded)
+  const isBudgetExceededDemo = resolution?.status === "partial_refund_rejected";
 
   return (
     <div className="dark mx-auto flex h-full max-w-7xl flex-col gap-6 overflow-y-auto bg-background p-6 text-foreground">
@@ -206,21 +216,33 @@ export default function AutonomousResolution() {
         </div>
       )}
 
-      {/* Budget Bar */}
+      {/* Budget Bar - highlight enforcement */}
       {c && (
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
           <div className="mb-2 flex justify-between text-xs text-white/50">
             <span>
               spent {fmt(c.spentCents)} · refunds {c.refundsUsed}/{c.maxRefunds}
+              {isBudgetExceededDemo && (
+                <span className="ml-2 rounded-full border border-rose-500/40 bg-rose-950/40 px-2 py-0.5 text-xs text-rose-300">
+                  LEASH ENFORCED: budget exceeded
+                </span>
+              )}
             </span>
             <span>{height}% of ceiling</span>
           </div>
           <div className="h-3 overflow-hidden rounded-full bg-white/10">
             <div
               className="h-full rounded-full transition-all duration-500"
-              style={{ width: `${height}%`, background: "linear-gradient(90deg,#34d399,#fbbf24,#fb7185)" }}
+              style={{ width: `${height}%`, background: isBudgetExceededDemo 
+                ? "linear-gradient(90deg,#fb7185,#f87171)" 
+                : "linear-gradient(90deg,#34d399,#fbbf24,#fb7185)" }}
             />
           </div>
+          {isBudgetExceededDemo && (
+            <p className="mt-2 text-sm text-rose-300 font-mono">
+              Agent determined ${fmt(resolution.determinedRefundCents)} refund · Contract ceiling: ${fmt(c.budgetCents)} · REJECTED: budget_exceeded
+            </p>
+          )}
         </div>
       )}
 
@@ -247,9 +269,13 @@ export default function AutonomousResolution() {
             <span className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${
               resolution.status === "resolved_with_refund"
                 ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-300"
+                : resolution.status === "partial_refund_rejected"
+                ? "border-rose-500/40 bg-rose-950/40 text-rose-300"
                 : "border-amber-500/40 bg-amber-950/40 text-amber-300"
             }`}>
-              {resolution.status === "resolved_with_refund" ? "Resolved with Refund" : "Resolved (No Refund)"}
+              {resolution.status === "resolved_with_refund" ? "Resolved with Refund" : 
+               resolution.status === "partial_refund_rejected" ? "Refund Rejected by LEASH (Budget Enforced)" :
+               "Resolved (No Refund)"}
             </span>
           )}
         </div>
@@ -262,6 +288,8 @@ export default function AutonomousResolution() {
             
             // Only show steps that were actually executed/attempted
             if (!stepResult && status === "pending") return null;
+            
+            const isKeyEnforcementStep = stepKey === "execute-refund" && stepResult?.outcome === "rejected";
             
             return (
               <div
@@ -288,22 +316,35 @@ export default function AutonomousResolution() {
                   <div className="flex-1 min-w-0 text-sm text-white/70 font-mono">
                     {stepResult.outcome === "approved" ? (
                       stepKey === "determine-resolution" && stepResult.details ? (
-                        `Refund determined: $${(stepResult.details.determinedRefundCents / 100).toFixed(2)} (contract budget: $${(stepResult.details.contractBudgetCents / 100).toFixed(2)})`
+                        <>
+                          Refund determined: <span className="text-emerald-300">${fmt(stepResult.details.determinedRefundCents)}</span>{' '}
+                          <span className="text-white/50">(contract budget: {fmt(stepResult.details.contractBudgetCents)})</span>
+                        </>
                       ) : stepKey === "execute-refund" && stepResult.details ? (
-                        stepResult.details.amountCents ? 
-                          `Refund executed: $${(stepResult.details.amountCents / 100).toFixed(2)}` :
-                          `Rejected: ${stepResult.details.message || stepResult.details.reason || "LEASH rejected"}`
+                        stepResult.details.amountCents ? (
+                          <>Refund executed: <span className="text-emerald-300">${fmt(stepResult.details.amountCents)}</span></>
+                        ) : (
+                          <>Rejected: <span className="text-rose-300">{stepResult.details.message || stepResult.details.reason || "LEASH rejected"}</span></>
+                        )
                       ) : stepKey === "draft-response" && stepResult.details ? (
                         `Response drafted (${stepResult.details.draft?.length || 0} chars)`
                       ) : "Completed"
                     ) : (
-                      `Rejected: ${stepResult.details?.message || stepResult.details?.reason || stepResult.details?.code || "Unknown"}`
+                      <>Rejected: <span className="text-rose-300">{stepResult.details?.message || stepResult.details?.reason || stepResult.details?.code || "Unknown"}</span></>
                     )}
                   </div>
                 )}
 
                 {status === "pending" && (
                   <div className="text-xs text-white/40">Not reached</div>
+                )}
+
+                {/* Key enforcement indicator */}
+                {isKeyEnforcementStep && (
+                  <div className="flex items-center gap-1.5 rounded-full border border-rose-500/40 bg-rose-950/40 px-2 py-0.5 text-xs text-rose-300">
+                    <span className="size-1.5 rounded-full bg-rose-400" />
+                    ENFORCED
+                  </div>
                 )}
               </div>
             );
@@ -323,7 +364,7 @@ export default function AutonomousResolution() {
                   switch (resolution.status) {
                     case "resolved_with_refund": return "Resolved with Refund";
                     case "resolved_no_refund": return "Resolved (No Refund)";
-                    case "partial_refund_rejected": return "Refund Rejected by LEASH (Enforcement)";
+                    case "partial_refund_rejected": return "Refund Rejected by LEASH (Budget Enforced)";
                     case "partial_response_failed": return "Partial — Response Failed";
                     case "failed": return "Failed — Required Action Failed";
                     default: return resolution.status;

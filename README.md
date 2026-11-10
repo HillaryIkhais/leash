@@ -1,117 +1,124 @@
-# LEASH — the authority contract for autonomous work
+# LEASH — run-scoped authority contracts for autonomous agents
 
-LEASH is a run-scoped authority contract for autonomous agents. A human issues
-one live contract — *refund ceiling $25, max two refunds, these actions
-permitted, that one forbidden, expires in ten minutes* — and every caller that
-touches the run (parent agent, delegated child agents, MCP-connected tools,
-UI, HTTP) is enforced against the same contract at every side effect, until
-the human ends it.
+> **An agent can delegate work, but it cannot delegate more authority than it was given.**
 
-**The framework decides whether a *caller* may call an action (RBAC, OAuth,
-org roles). LEASH decides whether this *run* may continue.**
+A human issues one live authority contract for a specific assignment. That contract has explicit boundaries: permitted actions, forbidden actions, spending limits, action counts, expiry, and revocation. Every action is checked against the contract at execution time. Delegated agents inherit restrictions from their parent — a child agent never receives broader authority than its parent possesses.
 
-## The moment it matters
+---
 
-Your agent is authorized to refund up to $25 on a damaged order. It issues a
-$18 refund. Then it retries the same request — without LEASH, that retry is a
-second $18. Your agent spawns a child to investigate; without LEASH, that child
-inherits the full $25 ceiling, not the $7 left. You hit revoke because the
-customer changed their mind; without LEASH, held authorizations often keep
-working because they were cached at deploy time.
+## The Problem
 
-Ordinary agent permissions answer "who may call this tool?" — set once, static,
-per-deployment. They cannot answer what matters *during* a specific case:
+Agent frameworks today answer "who may call this tool?" with static RBAC. They don't answer what matters during a specific assignment:
 
-- How much money may this run move in total? (cumulative, not per-call)
+- How much money may *this run* move in total? (cumulative, not per-call)
 - How many times may it act? (count, not just scope)
 - Until when is any of this valid? (expiry)
 - If a child agent is spawned, how much authority does it inherit? (attenuation)
 - If the human changes their mind mid-run, what stops the next call? (revocation)
-- If a request is retried, what stops a double refund? (idempotency)
+- If a request is retried, what prevents a double charge? (idempotency)
 
-Without run-scoped answers, a delegated sub-agent silently inherits everything
-its parent can do, retries double-spend, and a "stop" has no guaranteed
-enforcement point. LEASH is that missing layer.
+Without run-scoped enforcement, a delegated sub-agent silently inherits everything its parent can do, retries double-spend, and a "stop" has no guaranteed enforcement point.
 
-## How it works
+---
 
-A run contract is a row in `contracts`: integer-cent budget, refund count,
-permitted/forbidden action lists, expiry (epoch ms), status. Every gated
-action calls the same gate before any side effect:
+## How LEASH Works
+
+A **run contract** is a database row in `contracts`:
+
+| Field | Purpose |
+|-------|---------|
+| `budgetCents` | Total money this run may move (integer cents) |
+| `maxRefunds` | Maximum refund actions this run may perform |
+| `permittedActions` | JSON array of allowed action names |
+| `forbiddenActions` | JSON array of explicitly denied action names |
+| `expiresAt` | Epoch milliseconds — enforced by server clock |
+| `status` | `ACTIVE` \| `REVOKED` \| `EXPIRED` |
+
+Every gated action calls the same enforcement gate before any side effect:
 
 ```
 approveForCase(caseId, { action, amountCents, requestId }, { caller })
   │
-  ├─ replay check: same requestId?  → return the earlier receipt (idempotency)
-  ├─ evaluate() — the pure engine, in check order:
+  ├─ replay check: same requestId? → return earlier receipt (idempotency)
+  ├─ evaluate() — pure engine, strict check order:
   │     1. revoked      → contract_revoked
-  │     2. expired      → contract_expired   (enforcer's clock, not the caller's)
-  │     3. forbidden    → forbidden_action   (denial list beats the permit list)
+  │     2. expired      → contract_expired   (server clock, never caller's)
+  │     3. forbidden    → forbidden_action   (denial list beats permit list)
   │     4. not permitted→ action_not_permitted
   │     5. count limit  → count_limit_exceeded
-  │     6. budget       → budget_exceeded    (integer cents: spent + amount ≤ budget)
-  ├─ atomic holds — single conditional UPDATEs against the contract row:
+  │     6. budget       → budget_exceeded    (spent + amount ≤ budget)
+  ├─ atomic holds — single conditional UPDATEs:
   │     UPDATE contracts SET spent_cents = spent_cents + amt
   │     WHERE id = ? AND status = 'ACTIVE' AND spent_cents + amt <= budget_cents
-  │    Two concurrent calls cannot both spend the last allowance: one UPDATE
-  │    wins, the loser sees zero rows changed, unwinds its count hold, and is
-  │    rejected with the race recorded in the ledger.
-  └─ after the real side effect: settle() (hold → permanent spend)
+  │     Two concurrent calls cannot both spend the last allowance —
+  │     one UPDATE wins, the loser sees zero rows, unwinds, rejected.
+  └─ after real side effect: settle() (hold → permanent spend)
          or on failure: release() (allowance and count return, receipt stays)
 ```
 
-### Delegation attenuation
+---
 
-The core invariant: **a delegated sub-agent must never possess more authority
-than its parent.** `delegate-contract` checks the child's envelope against the
-parent's with `checkAttenuation()` before any delegate row is written — a
-child may narrow the action set, refund count, and budget cap, and may never
-widen any axis. Widening attempts are rejected and recorded in the ledger.
-At execution time every caller draws from the same contract pool, so child
-spend counts against the parent's budget, never a fresh one.
+## Delegation: Authority Never Expands
 
-### Revocation and expiry
+The core invariant: **a delegated sub-agent must never possess more authority than its parent.**
 
-The contract is re-read from the database at every evaluation — there is no
-cached token to outlive its authority. `revoke-contract` (human-only) flips
-the status; the next call from any caller is rejected with
-`contract_revoked`. Expiry uses the enforcer's server clock at evaluation
-time; the request payload carries no time (a caller cannot talk its way past
-the wall).
+1. `delegate-contract` registers a child in `contractDelegates` with an attenuated envelope.
+2. `checkAttenuation()` verifies the child's envelope is a strict subset of the parent's — narrower action set, lower refund count, lower budget cap, earlier expiry. Widening attempts are rejected and recorded.
+3. At execution time, the enforcer extracts the delegate label from `ctx.caller` (`subagent:<label>`) and validates it against the registry.
+4. Child spend counts against the **parent's budget**, never a fresh one.
 
-### MCP and caller identity
+**Trust model**: The Agent-Native framework provides `delegationDepth` (number) but NO label. LEASH's enforcer only validates `subagent:<label>` IF the application provides it. This is a trust model, not a cryptographic guarantee.
 
-Actions run through any dispatch surface (UI, agent tool, HTTP, MCP) hit the
-same gate. The caller string is resolved from framework-verified context:
-`frontend`, `root-agent`, `mcp:<client-name>`, `automation`, `tool`, `http`,
-or `cli`. The framework provides `delegationDepth` (number) but NO label for
-child agents. LEASH's delegation model is a TRUST MODEL: child delegates are
-registered in `contractDelegates`, and IF a caller provides `subagent:<label>`
-in `ctx.caller`, the enforcer verifies it against the registry. The framework
-does NOT automatically bind `delegationDepth` to a registered label.
+---
 
-## The receipts
+## Revocation & Expiry: Immediate, No Cached Tokens
 
-Every decision appends to `contract_events`: `ISSUED`, `DELEGATED`,
-`EXECUTED`, `REJECTED:<code>`, `REPLAYED`, `RELEASED`, `REVOKED`. The ledger
-is the audit trail — the control room (`/run`) renders it live, and
-`get-run` returns the same truth to the agent and to MCP clients.
+- The contract is re-read from the database at **every** evaluation — no cached token outlives its authority.
+- `revoke-contract` (human-only) flips status; the next call from any caller is rejected with `contract_revoked`.
+- Expiry uses the enforcer's server clock at evaluation time; the request payload carries no time.
 
-## Reproducible demonstration
+---
 
-One command, offline, real enforcement paths (engine + enforcer + the exact
-conditional-update bridge semantics; no database needed):
+## Receipts: Immutable Audit Trail
+
+Every decision appends to `contract_events`:
+
+| Event | Meaning |
+|-------|---------|
+| `ISSUED` | Contract created |
+| `DELEGATED` | Child agent registered |
+| `EXECUTED` | Action approved and settled |
+| `REJECTED:<code>` | Action denied with reason |
+| `REPLAYED` | Duplicate requestId — no re-execution |
+| `RELEASED` | Side effect failed — allowance returned |
+| `REVOKED` | Contract revoked mid-run |
+
+The ledger is the audit trail — the control room (`/run/:id`) renders it live, and `get-run` returns the same truth to humans, agents, and MCP clients.
+
+---
+
+## Agent-Native Integration
+
+LEASH is built **on** Agent-Native, not beside it:
+
+- **Shared actions** — `issue-refund`, `inspect-order`, `draft-response`, `delegate-contract`, `revoke-contract` are callable from UI, agent chat, HTTP, MCP, A2A, and CLI.
+- **Shared state** — The same `contracts`, `contractDelegates`, `contractEvents` tables are read by the control room, the agent's `get-run` introspection, and MCP clients.
+- **Authority at the action boundary** — Every `run()` begins with `approveForCase()`. The agent cannot bypass enforcement; the UI cannot bypass enforcement; MCP cannot bypass enforcement.
+- **Delegation as a first-class action** — `delegate-contract` is an action the parent agent can call (if authorized), creating a child whose envelope is validated at registration and enforced at execution.
+
+This is why Agent-Native is fundamental: it provides the shared action layer, the dispatcher that carries `ctx.caller` and `ctx.delegationDepth`, and the multi-surface transport (chat, HTTP, MCP, A2A, CLI) that all hit the same gate.
+
+---
+
+## Demo
+
+Run the complete enforcement demonstration offline (engine + enforcer + conditional-update bridge; no database needed):
 
 ```bash
 pnpm demo
 ```
 
-What you will see — a root agent and two registered delegates (`helper` with
-full envelope, `reader` with reads-only) under a $25.00 / 2-refund /
-10-minute contract. NOTE: The framework does not provide verified child agent
-identity; the demo uses caller strings "subagent:helper" and "subagent:reader"
-which the enforcer checks against the contractDelegates registry. This is a
-trust model — the framework does not bind delegationDepth to these labels.
+What you will see — a root agent and two registered delegates (`helper` with full envelope, `reader` with reads-only) under a $25.00 / 2-refund / 10-minute contract:
 
 1. Allowed refund of $18.00 → `approved`, $7.00 remaining
 2. `change-account-owner` → rejected `forbidden_action` (on the denial list)
@@ -123,31 +130,20 @@ trust model — the framework does not bind delegationDepth to these labels.
 8. The parent revokes; the next call → rejected `contract_revoked`
 9. The receipt ledger prints the whole story
 
-## Install, configure, run
+---
 
-Requires Node ≥ 22.22 and pnpm 10 (via corepack).
-
-```bash
-git clone https://github.com/HillaryIkhais/leash.git
-cd leash
-./scripts/lean-install.sh   # or: corepack enable && pnpm install --frozen-lockfile && pnpm test
-```
-
-Configuration (`.env`, see `.env.example`): auth is on by default;
-`BETTER_AUTH_SECRET` for production; `AUTH_DISABLED=true` only for local
-preview. No payment rail is configured — refunds are recorded side effects.
-
-Run it:
+## Live Application
 
 ```bash
-pnpm dev      # the app: chat, run control room at /run
-pnpm test     # the security suites (offline)
-pnpm demo     # the enforcement demonstration (offline)
+pnpm dev      # chat at /chat, run launcher at /run, control room at /run/:id
 ```
 
-The live workflow: open a support case, issue the run contract (human-only
-action), then work the case from chat or the run board — every beat is
-enforced and receipted.
+Workflow:
+1. **`/run`** — Human creates support case + issues run contract (refund ceiling, permitted/forbidden actions, expiry).
+2. **`/resolve/:caseId`** — Autonomous resolution: agent inspects order, determines refund, attempts execution (LEASH enforces), drafts response, closes case.
+3. **`/run/:contractId`** — Live control room: budget bar, enforcement beats, delegate list, real-time receipt ledger, revocation button.
+
+---
 
 ## Tests
 
@@ -155,19 +151,13 @@ Two suites, zero runtime dependencies beyond Node built-ins:
 
 ```bash
 pnpm test
-# or explicitly:
-node --experimental-transform-types --import ./tests/register-ts-resolve.mjs \
-  --test tests/leash-engine.node.ts tests/leash-enforce.node.ts
 ```
 
-- `tests/leash-engine.node.ts` — 21 adversarial cases against the pure
-  engine: check-order truthfulness, boundary milliseconds, exact-cent
-  ceilings, the attenuation matrix.
-- `tests/leash-enforce.node.ts` — 22 lifecycle cases: replay/idempotency,
-  concurrent double-spend races, hold unwind, release-after-failure,
-  revocation before execution, receipt distinctions. The in-memory bridge
-  implements exactly the drizzle bridge's conditional-update semantics, so
-  concurrent tests race through genuine microtask interleaving.
+- `tests/leash-engine.node.ts` — 21 adversarial cases against the pure engine: check-order truthfulness, boundary milliseconds, exact-cent ceilings, attenuation matrix.
+- `tests/leash-enforce.node.ts` — 22 lifecycle cases: replay/idempotency, concurrent double-spend races, hold unwind, release-after-failure, revocation before execution, receipt distinctions.
+- `tests/integration-workflow.node.ts` — 7 end-to-end integration tests: full resolution workflow, child envelope enforcement, revocation during execution, concurrent overspend, replay protection, delegation authorization, count-before-budget ordering.
+
+---
 
 ## Architecture
 
@@ -176,32 +166,55 @@ server/lib/leash-engine.ts           pure decision engine (no DB, no IO, injecte
 server/lib/leash-enforce.ts          replay / holds / delegate-envelope / settle / release lifecycle
 server/lib/leash-db-bridge.ts        drizzle bridge: conditional updates, double-spend-proof
 server/lib/leash-constants.ts        shared enums, canonical action names
-server/lib/leash-caller.ts           caller resolution: framework-verified delegation identity
-server/db/schema.ts                  contracts, delegates, reservations, events, support cases
-scripts/leash-demo.ts                the 9-beat demonstration (offline)
-tests/                               21 engine cases + 22 enforcer cases + integration workflow
+server/lib/leash-caller.ts           caller resolution: framework context → LEASH caller string
 server/lib/leash.ts                  composition root: leash singleton + approveForCase
-actions/issue-contract.ts            the authority grant itself (human-only)
-actions/delegate-contract.ts         attenuation time (child envelopes, authorized registration)
+server/db/schema.ts                  contracts, delegates, reservations, events, support cases
+scripts/leash-demo.ts                9-beat demonstration (offline)
+tests/                               21 engine + 22 enforcer + 7 integration cases
+actions/issue-contract.ts            authority grant (human-only: agentTool:false, mcpTool:false)
+actions/delegate-contract.ts         attenuation (child envelopes, authorized registration)
 actions/revoke-contract.ts           human-only, immediate, collective
-actions/issue-refund.ts              the headline boundary: approve → side effect → settle
-actions/inspect-order.ts             read path through the same gate
+actions/issue-refund.ts              headline boundary: approve → side effect → settle
+actions/inspect-order.ts             read path through same gate
 actions/draft-response.ts            permitted write: draft customer response
 actions/resolve-case.ts              autonomous resolution workflow (demo engine)
 actions/open-case.ts                 support case seeding (frontend only)
 app/routes/run._index.tsx            run launcher: issue contract → autonomous resolution
-app/routes/run.$contractId.tsx       live contract board: beats, budget, receipts
-app/routes/resolve.$caseId.tsx       autonomous resolution: live agent execution timeline
+app/routes/run.$contractId.tsx       live control room: budget, beats, delegates, receipts
+app/routes/resolve.$caseId.tsx       autonomous resolution: live execution timeline
 ```
 
-## Limitations (honesty table)
+---
 
-- Demo refunds are recorded side effects; no payment rail is wired. Customer responses explicitly state "no actual payment was processed."
-- Child-agent identity is registered in `contractDelegates` but the framework does NOT verify it at execution time. The framework provides `delegationDepth` but NO label. LEASH's enforcer only validates a `subagent:<label>` caller string IF the application provides it. This is a TRUST MODEL, not a cryptographic guarantee. Caller-supplied `childLabel` in action inputs is ignored.
-- The events ledger is append-only by code convention (enforcement code never updates it); a raw SQL writer could still mutate rows.
-- Double-spend protection lives in the conditional single-statement UPDATEs, not in transaction isolation — correct under PGlite and Postgres/Neon, but a driver that fragments statements would need transactions.
-- `mcp:<label>` caller attribution relies on the framework's MCP dispatch context.
-- The autonomous resolution engine (`resolve-case`) uses deterministic complaint analysis for the demo. An actual AI agent would call the same LEASH-governed actions through the chat interface.
+## Limitations (Honesty Table)
+
+| Area | Status |
+|------|--------|
+| **Payments** | Demo refunds are recorded side effects; no payment rail is wired. Customer responses explicitly state "no actual payment was processed." |
+| **Child identity** | Registered in `contractDelegates` but framework does NOT verify at execution time. Framework provides `delegationDepth` but NO label. LEASH's enforcer only validates `subagent:<label>` IF the application provides it. Caller-supplied `childLabel` in action inputs is ignored. |
+| **Ledger immutability** | Append-only by code convention; a raw SQL writer could still mutate rows. |
+| **Double-spend protection** | Conditional single-statement UPDATEs, not transaction isolation — correct under PGlite and Postgres/Neon. |
+| **MCP caller attribution** | Relies on framework's MCP dispatch context. |
+| **Autonomous resolution** | Uses deterministic complaint analysis for the demo. An actual AI agent would call the same LEASH-governed actions through the chat interface. |
+
+---
+
+## Running Locally
+
+```bash
+# Requirements: Node ≥ 22.22, pnpm 10 (via corepack)
+git clone https://github.com/HillaryIkhais/leash.git
+cd leash
+corepack enable && pnpm install --frozen-lockfile
+pnpm migrate:production   # applies schema to local DB
+pnpm dev                  # starts app at localhost:3000
+pnpm test                 # runs all test suites
+pnpm demo                 # offline enforcement demonstration
+```
+
+Configuration (`.env`): auth is on by default; `BETTER_AUTH_SECRET` for production; `AUTH_DISABLED=true` only for local preview.
+
+---
 
 ## License
 

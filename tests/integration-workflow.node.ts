@@ -217,29 +217,97 @@ test("integration: concurrent requests cannot overspend", async () => {
   assert.equal(db.contracts.get("ct_concurrent")!.spentCents, 1000);
 });
 
-test("integration: delegation authorization - only parent can register children", async () => {
+test("integration: expired contract rejects all actions", async () => {
   const db = new MemoryLeashDB();
-  db.seedContract("ct_delegate");
-  db.seedDelegate("ct_delegate", "parent", {
-    permittedActions: ["inspect-order", "issue-refund"],
-    maxRefunds: 1,
-    budgetCapCents: 1000,
+  db.seedContract("ct_expired");
+  const leash = makeEnforcer(db);
+
+  // Advance clock past expiry
+  db.clock += 700_000; // past the 10-minute expiry
+
+  const expired = await leash.approve("ct_expired", REQ({ 
+    action: "inspect-order", 
+    requestId: "rq-expired", 
+    amountCents: 0
+  }), { caller: "root-agent" });
+  assert.equal(expired.outcome, "rejected");
+  assert.equal(expired.decision?.code, "contract_expired");
+});
+
+test("integration: forbidden action rejected before any execution", async () => {
+  const db = new MemoryLeashDB();
+  db.seedContract("ct_forbidden");
+  const leash = makeEnforcer(db);
+
+  const forbidden = await leash.approve("ct_forbidden", REQ({ 
+    action: "change-account-owner", 
+    requestId: "rq-forbidden", 
+    amountCents: 0
+  }), { caller: "root-agent" });
+  
+  assert.equal(forbidden.outcome, "rejected");
+  assert.equal(forbidden.decision?.code, "forbidden_action");
+  assert.equal(db.eventsOf("ct_forbidden", EVENT_TYPE.REJECTED).length, 1);
+  assert.equal(db.eventsOf("ct_forbidden", EVENT_TYPE.EXECUTED).length, 0);
+});
+
+test("integration: action not in permitted set rejected", async () => {
+  const db = new MemoryLeashDB();
+  db.seedContract("ct_not_permitted", { 
+    permittedActions: JSON.stringify(["inspect-order"]),
+    forbiddenActions: JSON.stringify([])
   });
   const leash = makeEnforcer(db);
 
-  // Parent delegate can register child
-  const parentCaller = "subagent:parent";
-  const childReg = await leash.approve("ct_delegate", REQ({ 
-    action: "delegate-contract", 
-    requestId: "rq-delegate-child", 
-    amountCents: 0
-  }), { caller: parentCaller });
-  // Note: delegate-contract is a separate action, not tested via leash.approve
-  // This test documents the authorization logic in delegate-contract.ts
+  const notPermitted = await leash.approve("ct_not_permitted", REQ({ 
+    action: "issue-refund", 
+    requestId: "rq-not-permitted", 
+    amountCents: 100,
+    refund: true
+  }), { caller: "root-agent" });
   
-  // The delegate-contract action enforces: only root-agent can register top-level,
-  // only parent delegate can register children
-  // This is tested at the action level, not the enforcer level
+  assert.equal(notPermitted.outcome, "rejected");
+  assert.equal(notPermitted.decision?.code, "action_not_permitted");
+});
+
+test("integration: count limit evaluated before budget", async () => {
+  const db = new MemoryLeashDB();
+  db.seedContract("ct_count_limit", { 
+    budgetCents: 100000,  // huge budget
+    maxRefunds: 1,
+    refundsUsed: 1
+  });
+  const leash = makeEnforcer(db);
+
+  // Count limit exceeded even though budget is huge
+  const over = await leash.approve("ct_count_limit", REQ({ 
+    action: "issue-refund", 
+    requestId: "rq-count", 
+    amountCents: 100,
+    refund: true
+  }), { caller: "root-agent" });
+  
+  assert.equal(over.outcome, "rejected");
+  assert.equal(over.decision?.code, "count_limit_exceeded");
+  // Budget should be untouched
+  assert.equal(db.contracts.get("ct_count_limit")!.spentCents, 0);
+});
+
+test("integration: unknown child delegate fails closed", async () => {
+  const db = new MemoryLeashDB();
+  db.seedContract("ct_unknown_child");
+  // No delegates registered
+  const leash = makeEnforcer(db);
+
+  const unknown = await leash.approve("ct_unknown_child", REQ({ 
+    action: "issue-refund", 
+    requestId: "rq-unknown", 
+    amountCents: 100,
+    refund: true
+  }), { caller: "subagent:nonexistent" });
+  
+  assert.equal(unknown.outcome, "rejected");
+  assert.equal(unknown.decision?.code, "delegate_not_found");
 });
 
 test("engine: budget evaluation with remaining budget", () => {
@@ -283,4 +351,46 @@ test("engine: count limit evaluated before budget", () => {
   const over = evaluate(snap, { action: "issue-refund", requestId: "rq-1", amountCents: 100, refund: true, now: T0 });
   assert.equal(over.ok, false);
   if (!over.ok) assert.equal(over.code, "count_limit_exceeded");
+});
+
+test("engine: revoked status beats expired in check order", () => {
+  const T0 = 1_700_000_000_000;
+  const snap = {
+    status: "REVOKED",
+    budgetCents: 2500,
+    spentCents: 0,
+    maxRefunds: 1,
+    refundsUsed: 0,
+    permittedActions: ["issue-refund"],
+    forbiddenActions: [],
+    expiresAt: T0 + 600_000,
+  };
+
+  // Even though not expired, revoked should reject first
+  const revoked = evaluate(snap, { action: "issue-refund", requestId: "rq-1", amountCents: 100, refund: true, now: T0 });
+  assert.equal(revoked.ok, false);
+  if (!revoked.ok) assert.equal(revoked.code, "contract_revoked");
+});
+
+test("engine: expiry at exact boundary millisecond", () => {
+  const T0 = 1_700_000_000_000;
+  const snap = {
+    status: "ACTIVE",
+    budgetCents: 2500,
+    spentCents: 0,
+    maxRefunds: 1,
+    refundsUsed: 0,
+    permittedActions: ["issue-refund"],
+    forbiddenActions: [],
+    expiresAt: T0 + 600_000,
+  };
+
+  // Exactly at expiry boundary
+  const atBoundary = evaluate(snap, { action: "issue-refund", requestId: "rq-1", amountCents: 100, refund: true, now: T0 + 600_000 });
+  assert.equal(atBoundary.ok, false);
+  if (!atBoundary.ok) assert.equal(atBoundary.code, "contract_expired");
+
+  // One millisecond before - should pass
+  const beforeBoundary = evaluate(snap, { action: "issue-refund", requestId: "rq-2", amountCents: 100, refund: true, now: T0 + 600_000 - 1 });
+  assert.equal(beforeBoundary.ok, true);
 });
