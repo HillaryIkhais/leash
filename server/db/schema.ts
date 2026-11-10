@@ -64,5 +64,9 @@ export const supportCases = table("support_cases", {
   orderRef: text("order_ref").notNull(),
   orderTotalCents: integer("order_total_cents").notNull(),
   complaint: text("complaint").notNull(),
+  status: text("status").default("open"),          // open | resolved_with_refund | resolved_no_refund
+  resolvedAt: integer("resolved_at"),
+  resolutionRefundCents: integer("resolution_refund_cents"),
+  resolutionReason: text("resolution_reason"),
   createdAt: integer("created_at").notNull(),
 });

@@ -5,8 +5,12 @@
  * a child can only ever be narrower than its parent on every axis.
  *
  * IDENTITY: The childLabel registered here becomes the VERIFIED identity
- * used by the enforcer. The framework's delegationDepth maps to this label
+ * used by the enforcer. The framework's delegation context maps to this label
  * at execution time. Caller-supplied childLabel in action inputs is IGNORED.
+ *
+ * AUTHORIZATION: Only the parent delegate (or root agent for empty parentLabel)
+ * may register child delegates. The caller must match the parent's registered
+ * identity (or be root-agent for top-level delegation).
  */
 import { defineAction } from "@agent-native/core/action";
 import { getDb } from "../server/db";
@@ -17,9 +21,19 @@ import { contracts, contractDelegates, contractEvents } from "../server/db/schem
 import { EVENT_TYPE } from "../server/lib/leash-constants";
 import { eq, and } from "drizzle-orm";
 
+function callerMatchesParent(caller: string, parentLabel: string): boolean {
+  if (!parentLabel) {
+    // Top-level delegation: only root-agent can register direct children
+    return caller === "root-agent";
+  }
+  // Child delegation: caller must be the parent delegate
+  // Format: "subagent:<parentLabel>" or "subagent:<parentLabel>:d<depth>"
+  return caller === `subagent:${parentLabel}` || caller.startsWith(`subagent:${parentLabel}:d`);
+}
+
 export default defineAction({
   description:
-    "Register a child agent inside a run contract with an attenuated envelope. The child's action set, refund count and budget cap must fit inside the parent envelope. The childLabel becomes the verified identity for enforcement.",
+    "Register a child agent inside a run contract with an attenuated envelope. The child's action set, refund count and budget cap must fit inside the parent envelope. The childLabel becomes the verified identity for enforcement. Only the parent delegate (or root-agent) may register children.",
   schema: z.object({
     contractId: z.string(),
     parentLabel: z.string().describe("Label of the parent delegate; empty means the root agent"),
@@ -32,6 +46,25 @@ export default defineAction({
     const db = getDb();
     const now = Date.now();
     const caller = resolveCaller(input as any, ctx);
+
+    // Authorization: verify caller matches the parent delegate
+    if (!callerMatchesParent(caller, input.parentLabel)) {
+      await db.insert(contractEvents).values({
+        id: `ev_${crypto.randomUUID()}`,
+        contractId: input.contractId,
+        type: EVENT_TYPE.REJECTED,
+        action: "delegate-contract",
+        caller,
+        amountCents: null,
+        code: "delegate_unauthorized",
+        detail: JSON.stringify({ 
+          message: `caller '${caller}' not authorized to register children for parent '${input.parentLabel || "root"}'`,
+          parentLabel: input.parentLabel,
+        }),
+        createdAt: now,
+      });
+      return { ok: false, code: "delegate_unauthorized", message: "caller not authorized for this parent delegation" };
+    }
 
     const [contract] = await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1);
     if (!contract || contract.status !== "ACTIVE") {
@@ -109,6 +142,7 @@ export default defineAction({
         permitted: input.permittedActions,
         maxRefunds: input.maxRefunds,
         budgetCapCents: input.budgetCapCents,
+        parent: input.parentLabel || "root",
       }),
       createdAt: now,
     });

@@ -165,36 +165,36 @@ node --experimental-transform-types --import ./tests/register-ts-resolve.mjs \
 ## Architecture
 
 ```
-server/lib/leash-engine.ts      pure decision engine (no DB, no IO, injected clock)
-server/lib/leash-enforce.ts     replay / holds / delegate-envelope / settle / release lifecycle
-server/lib/leash-db-bridge.ts   drizzle bridge: conditional updates, double-spend-proof
-server/lib/leash-constants.ts   shared enums, canonical action names
-server/db/schema.ts             contracts, delegates, reservations, events, support cases
-scripts/leash-demo.ts           the 9-beat demonstration (offline)
-tests/                          21 engine cases + 22 enforcer cases
-server/lib/leash.ts             composition root: leash singleton + approveForCase
-actions/issue-contract.ts       the authority grant itself (human-only)
-actions/delegate-contract.ts    attenuation time (child envelopes)
-actions/revoke-contract.ts      human-only, immediate, collective
-actions/issue-refund.ts         the headline boundary: approve → side effect → settle
-app/routes/run._index.tsx       run control room: contracts at a glance
-app/routes/run.$contractId.tsx  live contract board: beats, budget, receipts
-scripts/leash-demo.ts           the 8-beat demonstration (offline)
-tests/                          21 engine cases + 22 enforcer cases
+server/lib/leash-engine.ts           pure decision engine (no DB, no IO, injected clock)
+server/lib/leash-enforce.ts          replay / holds / delegate-envelope / settle / release lifecycle
+server/lib/leash-db-bridge.ts        drizzle bridge: conditional updates, double-spend-proof
+server/lib/leash-constants.ts        shared enums, canonical action names
+server/lib/leash-caller.ts           caller resolution: framework-verified delegation identity
+server/db/schema.ts                  contracts, delegates, reservations, events, support cases
+scripts/leash-demo.ts                the 9-beat demonstration (offline)
+tests/                               21 engine cases + 22 enforcer cases + integration workflow
+server/lib/leash.ts                  composition root: leash singleton + approveForCase
+actions/issue-contract.ts            the authority grant itself (human-only)
+actions/delegate-contract.ts         attenuation time (child envelopes, authorized registration)
+actions/revoke-contract.ts           human-only, immediate, collective
+actions/issue-refund.ts              the headline boundary: approve → side effect → settle
+actions/inspect-order.ts             read path through the same gate
+actions/draft-response.ts            permitted write: draft customer response
+actions/resolve-case.ts              autonomous resolution workflow (demo engine)
+actions/open-case.ts                 support case seeding (frontend only)
+app/routes/run._index.tsx            run launcher: issue contract → autonomous resolution
+app/routes/run.$contractId.tsx       live contract board: beats, budget, receipts
+app/routes/resolve.$caseId.tsx       autonomous resolution: live agent execution timeline
 ```
 
 ## Limitations (honesty table)
 
-- Demo refunds are recorded side effects; no payment rail is wired.
-- Child-agent identity is *declared* (`childLabel` in the call), not
-  cryptographic; the enforcer records the claim in the ledger.
-- The events ledger is append-only by code convention (enforcement code never
-  updates it); a raw SQL writer could still mutate rows.
-- Double-spend protection lives in the conditional single-statement UPDATEs,
-  not in transaction isolation — correct under PGlite and Postgres/Neon,
-  but a driver that fragments statements would need transactions.
-- `mcp:<label>` caller attribution relies on the framework's MCP dispatch
-  context.
+- Demo refunds are recorded side effects; no payment rail is wired. Customer responses explicitly state "no actual payment was processed."
+- Child-agent identity is registered in `contractDelegates` and verified at execution time via the framework's delegation context. The enforcer extracts the label from `ctx.caller` (`subagent:<label>`) and validates it against the registry. Caller-supplied `childLabel` in action inputs is ignored.
+- The events ledger is append-only by code convention (enforcement code never updates it); a raw SQL writer could still mutate rows.
+- Double-spend protection lives in the conditional single-statement UPDATEs, not in transaction isolation — correct under PGlite and Postgres/Neon, but a driver that fragments statements would need transactions.
+- `mcp:<label>` caller attribution relies on the framework's MCP dispatch context.
+- The autonomous resolution engine (`resolve-case`) uses deterministic complaint analysis for the demo. An actual AI agent would call the same LEASH-governed actions through the chat interface.
 
 ## License
 

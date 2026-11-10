@@ -1,14 +1,15 @@
 /**
  * Resolve-case — AUTONOMOUS AGENT WORKFLOW.
  * The agent receives a support case, inspects the order, determines resolution,
- * executes permitted actions, and produces a complete resolution outcome.
- * All actions go through LEASH enforcement.
+ * executes permitted actions through LEASH, and produces a complete resolution outcome.
+ * All actions go through LEASH enforcement with framework-verified caller identity.
  */
 import { defineAction, ActionContractError } from "@agent-native/core/action";
 import { getDb } from "../server/db";
 import { z } from "zod";
 import { supportCases, contractEvents, contracts } from "../server/db/schema";
 import { approveForCase, leash, resolveContractForCase } from "../server/lib/leash";
+import { resolveCaller } from "../server/lib/leash-caller";
 import { eq, desc } from "drizzle-orm";
 
 const RESOLUTION_STEPS = [
@@ -21,16 +22,18 @@ const RESOLUTION_STEPS = [
 
 export default defineAction({
   description:
-    "Autonomously resolve a support case through LEASH-governed actions. The agent inspects the order, determines the appropriate resolution, executes permitted refunds, drafts customer response, and closes the case.",
+    "Autonomously resolve a support case through LEASH-governed actions. The agent inspects the order, determines the appropriate resolution, attempts refunds (LEASH enforces authority), drafts customer response, and closes the case.",
   schema: z.object({
     caseId: z.string().describe("Support case to resolve"),
     requestIdPrefix: z.string().default("resolve").describe("Prefix for idempotency keys"),
-    maxRefundAmountCents: z.number().int().positive().optional().describe("Maximum refund the agent may attempt"),
   }),
   run: async (input, ctx) => {
     const db = getDb();
     const prefix = input.requestIdPrefix;
     const now = Date.now();
+
+    // Derive caller from framework execution context — NOT hardcoded
+    const caller = resolveCaller({}, ctx);
 
     // Get the case details
     const [supportCase] = await db
@@ -80,6 +83,7 @@ export default defineAction({
     let refundExecuted = false;
     let refundAmount = 0;
     let customerResponse = "";
+    let resolutionReason = "";
 
     // STEP 1: Inspect the order
     const inspectRequestId = `${prefix}-inspect-${now}`;
@@ -88,7 +92,7 @@ export default defineAction({
       amountCents: 0,
       refund: false,
       requestId: inspectRequestId,
-    }, { caller: "root-agent" });
+    }, { caller });
 
     resolution.push({
       step: "inspect-order",
@@ -105,12 +109,12 @@ export default defineAction({
 
     // STEP 2: Determine resolution based on complaint and order
     // The agent analyzes the complaint and decides on a refund amount
+    // NO agent-side cap — let LEASH enforce the contract budget
     const complaint = supportCase.complaint.toLowerCase();
     let determinedRefundCents = 0;
-    let resolutionReason = "";
 
     if (complaint.includes("damaged") || complaint.includes("broken") || complaint.includes("snap")) {
-      // Full refund for damaged items
+      // Full refund for damaged items — may exceed contract budget, LEASH will reject
       determinedRefundCents = supportCase.orderTotalCents;
       resolutionReason = "Item arrived damaged - full refund warranted";
     } else if (complaint.includes("late") || complaint.includes("delay")) {
@@ -127,12 +131,6 @@ export default defineAction({
       resolutionReason = "General complaint - goodwill partial refund";
     }
 
-    // Respect the agent's max refund limit if provided
-    if (input.maxRefundAmountCents && determinedRefundCents > input.maxRefundAmountCents) {
-      determinedRefundCents = input.maxRefundAmountCents;
-      resolutionReason += ` (capped at agent max: $${(input.maxRefundAmountCents / 100).toFixed(2)})`;
-    }
-
     resolution.push({
       step: "determine-resolution",
       action: "determine-resolution",
@@ -145,11 +143,13 @@ export default defineAction({
         contractBudgetCents: contract.budgetCents,
         contractMaxRefunds: contract.maxRefunds,
         contractRefundsUsed: contract.refundsUsed,
+        remainingBudgetCents: contract.budgetCents - contract.spentCents,
       },
       timestamp: Date.now(),
     });
 
-    // STEP 3: Execute refund if determined amount > 0 and contract permits
+    // STEP 3: Execute refund — attempt the determined amount
+    // LEASH will reject if it exceeds budget or refund count
     if (determinedRefundCents > 0 && contract.maxRefunds > contract.refundsUsed) {
       const refundRequestId = `${prefix}-refund-${now}`;
       const refundApproval = await approveForCase(input.caseId, {
@@ -157,7 +157,7 @@ export default defineAction({
         amountCents: determinedRefundCents,
         refund: true,
         requestId: refundRequestId,
-      }, { caller: "root-agent" });
+      }, { caller });
 
       resolution.push({
         step: "execute-refund",
@@ -181,7 +181,7 @@ export default defineAction({
           contractId,
           type: "REFUND_ISSUED",
           action: "issue-refund",
-          caller: "root-agent",
+          caller,
           amountCents: determinedRefundCents,
           code: null,
           detail: JSON.stringify({
@@ -223,7 +223,7 @@ export default defineAction({
       amountCents: 0,
       refund: false,
       requestId: responseRequestId,
-    }, { caller: "root-agent" });
+    }, { caller });
 
     resolution.push({
       step: "draft-response",
@@ -240,20 +240,32 @@ export default defineAction({
       await leash.settle(responseRequestId);
     }
 
-    // STEP 5: Close case (mark as resolved in events)
+    // STEP 5: Close case — persist resolution status on the case itself
     const closeRequestId = `${prefix}-close-${now}`;
+    const resolutionStatus = refundExecuted ? "resolved_with_refund" : "resolved_no_refund";
+
     resolution.push({
       step: "close-case",
       action: "close-case",
       requestId: closeRequestId,
       outcome: "approved",
       details: {
-        resolutionStatus: refundExecuted ? "resolved_with_refund" : "resolved_no_refund",
+        resolutionStatus,
         refundAmountCents: refundAmount,
         customerResponse,
       },
       timestamp: Date.now(),
     });
+
+    // Persist case resolution status
+    await db.update(supportCases)
+      .set({ 
+        status: resolutionStatus,
+        resolvedAt: Date.now(),
+        resolutionRefundCents: refundAmount,
+        resolutionReason,
+      })
+      .where(eq(supportCases.id, input.caseId));
 
     // Record case resolution event
     await db.insert(contractEvents).values({
@@ -261,11 +273,11 @@ export default defineAction({
       contractId,
       type: "CASE_RESOLVED",
       action: "close-case",
-      caller: "root-agent",
+      caller,
       amountCents: refundAmount,
       code: null,
       detail: JSON.stringify({
-        resolutionStatus: refundExecuted ? "resolved_with_refund" : "resolved_no_refund",
+        resolutionStatus,
         refundAmountCents: refundAmount,
         customerResponse,
         resolutionReason,
@@ -278,7 +290,7 @@ export default defineAction({
       caseId: input.caseId,
       contractId,
       resolution: {
-        status: refundExecuted ? "resolved_with_refund" : "resolved_no_refund",
+        status: resolutionStatus,
         refundAmountCents: refundAmount,
         customerResponse,
         resolutionReason,
@@ -296,7 +308,7 @@ function generateCustomerResponse(
   reason: string
 ): string {
   const refundText = refundExecuted
-    ? `We have processed a refund of $${(refundAmount / 100).toFixed(2)} to your original payment method.`
+    ? `We have recorded a simulated refund of $${(refundAmount / 100).toFixed(2)} for this case. This is a demo — no actual payment was processed.`
     : "We were unable to process a refund for this case.";
 
   return `Dear ${customer},
@@ -305,10 +317,10 @@ Thank you for contacting us about order ${orderRef}. We sincerely apologize for 
 
 ${reason}.
 
-${refundText} The refund should appear in your account within 3-5 business days.
+${refundText}
 
 We value your business and hope to restore your confidence in our service. If you have any further questions, please don't hesitate to reach out.
 
 Best regards,
-Customer Support Team`;
+Customer Support Team (LEASH Demo)`;
 }

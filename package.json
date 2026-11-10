@@ -12,7 +12,7 @@
     "typecheck": "agent-native typecheck",
     "action": "agent-native action",
     "script": "agent-native script",
-    "test": "node --experimental-transform-types --import ./tests/register-ts-resolve.mjs --test tests/leash-engine.node.ts tests/leash-enforce.node.ts",
+    "test": "node --experimental-transform-types --import ./tests/register-ts-resolve.mjs --test tests/leash-engine.node.ts tests/leash-enforce.node.ts tests/integration-workflow.node.ts",
     "demo": "node --experimental-transform-types --import ./tests/register-ts-resolve.mjs scripts/leash-demo.ts",
     "test:vitest": "vitest --run --passWithNoTests"
   },
