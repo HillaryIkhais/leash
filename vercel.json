@@ -1,4 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null
+  "framework": null,
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm migrate:production && pnpm build",
+  "env": {
+    "AGENT_NATIVE_VERCEL_CRON_SCHEDULE": "0 9 * * *"
+  }
 }
