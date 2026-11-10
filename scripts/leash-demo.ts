@@ -1,18 +1,18 @@
 /**
- * LEASH demo — the delegation story, executed against the real enforcement
- * stack (engine + enforcer + the bridge contract, in memory; the production
- * bridge is drizzle-over-Postgres with the same conditional updates).
+ * LEASH demo — the delegation story with verifiable credentials, executed
+ * against the real enforcement stack (engine + enforcer + the bridge contract,
+ * in memory; the production bridge is drizzle-over-Postgres with the same
+ * conditional updates).
  *
  * Run: pnpm demo
  *   (equivalently: node --experimental-transform-types \
  *      --import ./tests/register-ts-resolve.mjs scripts/leash-demo.ts)
  *
- * IMPORTANT: This demo SIMULATES what happens when the application sets
- * ctx.caller = "subagent:<label>" for child agents. The Agent-Native
- * framework does NOT automatically do this. The framework provides
- * delegationDepth but NO label. For the enforcer to verify child identity,
- * the application MUST set ctx.caller = "subagent:<registered-label>".
- * This is a TRUST MODEL, not a cryptographic guarantee.
+ * This demo uses the VERIFIABLE CREDENTIAL model:
+ * - Delegates are registered with a high-entropy credential
+ * - The credential is shown ONLY ONCE at registration (in the DELEGATED event)
+ * - Child agents MUST present the credential as "subagent:<label>:<credential>"
+ * - The enforcer verifies the credential against the stored hash
  */
 import { LeashEnforcer, type ApproveResult } from "../server/lib/leash-enforce";
 import { EVENT_TYPE } from "../server/lib/leash-constants";
@@ -34,15 +34,27 @@ db.seedContract("ct_demo_1", {
 
 // The parent delegates: helper gets a full envelope, reader a narrow one
 // (reads only — no refunds, no money).
+// NOTE: In the real system, credentials are generated at registration and shown
+// only once in the DELEGATED event. For this demo, we'll manually add the
+// credential hashes to simulate the registration output.
+// Credential for "helper": "helper_credential_demo"
+// Credential for "reader": "reader_credential_demo"
+const HELPER_CREDENTIAL = "helper_credential_demo";
+const READER_CREDENTIAL = "reader_credential_demo";
+const HELPER_HASH = require("crypto").createHash("sha256").update(HELPER_CREDENTIAL).digest("hex");
+const READER_HASH = require("crypto").createHash("sha256").update(READER_CREDENTIAL).digest("hex");
+
 db.seedDelegate("ct_demo_1", "helper", {
   permittedActions: ["inspect-order", "issue-refund", "draft-response"],
   maxRefunds: 2,
   budgetCapCents: 2500,
+  credentialHash: HELPER_HASH,
 });
 db.seedDelegate("ct_demo_1", "reader", {
   permittedActions: ["inspect-order"],
   maxRefunds: 0,
   budgetCapCents: 0,
+  credentialHash: READER_HASH,
 });
 
 const approve = (requestId: string, action: string, caller: string, amountCents = 0, refund = false) =>
@@ -63,36 +75,36 @@ function report(result: ApproveResult): string {
 }
 
 banner("1", "registered delegate 'helper' performs an ALLOWED action");
-// App provides caller="subagent:helper" — enforcer verifies against contractDelegates
-const ok = await approve("rq-01", "issue-refund", "subagent:helper", 1800, true);
+// App provides caller="subagent:helper:<credential>" — enforcer verifies credential hash
+const ok = await approve("rq-01", "issue-refund", `subagent:helper:${HELPER_CREDENTIAL}`, 1800, true);
 console.log("  decision:", report(ok));
 await leash.settle("rq-01");
 
 banner("2", "delegate attempts an action OUTSIDE its delegation (forbidden list)");
-const forbidden = await approve("rq-02", "change-account-owner", "subagent:helper");
+const forbidden = await approve("rq-02", "change-account-owner", `subagent:helper:${HELPER_CREDENTIAL}`);
 console.log("  decision:", report(forbidden));
 
 banner("3", "delegate attempts an action NOT IN the permitted set");
-const notPermitted = await approve("rq-03", "open-case", "subagent:helper");
+const notPermitted = await approve("rq-03", "open-case", `subagent:helper:${HELPER_CREDENTIAL}`);
 console.log("  decision:", report(notPermitted));
 
 banner("4", "delegate attempts to EXCEED the budget ($18.00 spent + $7.01 vs $25.00)");
-const overspend = await approve("rq-04", "issue-refund", "subagent:helper", 701, true);
+const overspend = await approve("rq-04", "issue-refund", `subagent:helper:${HELPER_CREDENTIAL}`, 701, true);
 console.log("  decision:", report(overspend));
 
 banner("5", "duplicate requestId replays — no double execution");
-const replay = await approve("rq-01", "issue-refund", "subagent:helper", 1800, true);
+const replay = await approve("rq-01", "issue-refund", `subagent:helper:${HELPER_CREDENTIAL}`, 1800, true);
 console.log("  decision:", report(replay));
 
 banner("6", "failed side effect releases the allowance");
-const doomed = await approve("rq-06", "issue-refund", "subagent:helper", 700, true);
+const doomed = await approve("rq-06", "issue-refund", `subagent:helper:${HELPER_CREDENTIAL}`, 700, true);
 console.log("  approved:", doomed.outcome, "| receipt:", doomed.outcome === "approved" ? doomed.receiptId : "—");
 const released = await leash.release("rq-06");
 console.log("  side effect failed -> released:", released, "| allowance returned, RELEASED receipt written");
 
 banner("7", "registered delegate 'reader' acts OUTSIDE ITS OWN envelope (attenuation, enforced live)");
 // Reader delegate only has inspect-order, no refunds, no budget
-const envelope = await approve("rq-07", "issue-refund", "subagent:reader", 100, true);
+const envelope = await approve("rq-07", "issue-refund", `subagent:reader:${READER_CREDENTIAL}`, 100, true);
 console.log("  decision:", report(envelope));
 
 banner("8", "parent REVOKES the contract; further use is rejected");
@@ -103,13 +115,17 @@ db.events.push({
   detail: JSON.stringify({ note: "held authorizations terminate at next evaluation" }),
   createdAt: db.clock,
 });
-const afterRevoke = await approve("rq-08", "inspect-order", "subagent:helper");
+const afterRevoke = await approve("rq-08", "inspect-order", `subagent:helper:${HELPER_CREDENTIAL}`);
 console.log("  decision:", report(afterRevoke));
 
-banner("9", "the receipt ledger shows what happened and why");
+banner("9", "invalid credential is rejected");
+const badCred = await approve("rq-09", "issue-refund", `subagent:helper:bad_credential`, 100, true);
+console.log("  decision:", report(badCred));
+
+banner("10", "the receipt ledger shows what happened and why");
 for (const e of [...db.events].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))) {
   const amt = e.amountCents == null ? "" : ` $${(e.amountCents / 100).toFixed(2)}`;
-  console.log(`  [${e.type.padEnd(9)}] ${e.caller.padEnd(19)} ${(e.action ?? "").padEnd(21)}${amt} ${e.code ?? ""}`);
+  console.log(`  [${e.type.padEnd(9)}] ${e.caller.padEnd(25)} ${(e.action ?? "").padEnd(21)}${amt} ${e.code ?? ""}`);
 }
 
 const counts = db.events.reduce<Record<string, number>>((m, e) => ((m[e.type] = (m[e.type] ?? 0) + 1), m), {});
@@ -118,7 +134,7 @@ console.log("Contract final state:", JSON.stringify(db.contracts.get("ct_demo_1"
 
 if (
   (counts.EXECUTED ?? 0) !== 2 || // rq-01 settled, rq-06 approved-then-released
-  (counts.REJECTED ?? 0) !== 5 || // forbidden, not-permitted, budget wall, envelope, revoked
+  (counts.REJECTED ?? 0) !== 6 || // forbidden, not-permitted, budget wall, envelope, revoked, bad cred
   (counts.REPLAYED ?? 0) !== 1 ||
   (counts.RELEASED ?? 0) !== 1 ||
   (counts.REVOKED ?? 0) !== 1
@@ -131,4 +147,4 @@ if (final.spentCents !== 1800 || final.refundsUsed !== 1) {
   console.error("DEMO FAILED — released allowance did not return");
   process.exit(1);
 }
-console.log("\nDEMO OK — 2 executed (1 released), 5 rejected, 1 replayed, 1 revoked; net spend $18.00 of $25.00");
+console.log("\nDEMO OK — 2 executed (1 released), 6 rejected, 1 replayed, 1 revoked; net spend $18.00 of $25.00");

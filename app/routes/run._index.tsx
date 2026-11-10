@@ -2,11 +2,11 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useActionMutation } from "@agent-native/core/client/use-action";
 import { useSetPageTitle } from "@agent-native/toolkit/app-shell";
-
-/** Launcher: seed the demo case, then issue the run contract over it. */
-export function meta() {
-  return [{ title: "LEASH · Issue run contract" }];
-}
+import {
+  useChatThreads,
+  navigateWithAgentChatViewTransition,
+  chatThreadPath,
+} from "@agent-native/toolkit/app/chat/agentkit-chat/rail";
 
 const DEFAULTS = {
   customer: "Sasha Lindqvist",
@@ -16,16 +16,24 @@ const DEFAULTS = {
     "Item arrived damaged (the ceramic handle snapped). Customer is upset; asks for a resolution today.",
 };
 
+export function meta() {
+  return [{ title: "LEASH · Issue run contract" }];
+}
+
 export default function RunLauncher() {
   useSetPageTitle("LEASH · Issue run contract");
   const navigate = useNavigate();
   const [form, setForm] = useState({ ...DEFAULTS });
-  const [ceiling, setCeiling] = useState(2500);
-  const [maxRefunds, setMaxRefunds] = useState(1);
+  const [ceiling, setCeiling] = useState(20000);
+  const [maxRefunds, setMaxRefunds] = useState(2);
   const [minutes, setMinutes] = useState(10);
 
   const open = useActionMutation("open-case");
   const issue = useActionMutation("issue-contract");
+
+  const { createThread } = useChatThreads(undefined, "chat", undefined, {
+    autoCreate: false,
+  });
 
   const launch = async () => {
     const opened: any = await open.mutateAsync({
@@ -43,8 +51,35 @@ export default function RunLauncher() {
       forbiddenActions: ["change-account-owner"],
       minutes,
     });
-    // Navigate to the autonomous resolution experience
-    navigate(`/resolve/${opened.caseId}`);
+
+    // Create a new chat thread for the agent to resolve this case
+    const threadId = await createThread();
+    if (!threadId) {
+      throw new Error("Failed to create chat thread");
+    }
+
+    // Navigate to chat with initial message asking agent to resolve the case
+    const initialMessage = `Please resolve support case ${opened.caseId} (order ${form.orderRef} for ${form.customer}). 
+
+The customer complaint: "${form.complaint}"
+
+Please:
+1. Inspect the order to understand the details
+2. Determine an appropriate resolution based on the complaint
+3. If a refund is warranted, execute it through the LEASH-governed issue-refund action
+4. Draft a customer response explaining the resolution
+5. Report the final outcome
+
+The contract budget is $${(ceiling / 100).toFixed(2)} with max ${maxRefunds} refunds.`;
+
+    navigateWithAgentChatViewTransition(navigate, chatThreadPath(threadId), {
+      state: {
+        initialMessage,
+        initialComposerOptions: {
+          mode: "act",
+        },
+      },
+    });
   };
 
   const row = (
@@ -69,7 +104,7 @@ export default function RunLauncher() {
         <h1 className="text-2xl font-semibold">Write the run contract</h1>
         <p className="mt-1 max-w-2xl text-sm text-white/50">
           One delegated job, one live envelope: ceiling, count, permitted and
-          forbidden actions, lifetime. Every agent, child agent and external
+          forbidden actions, lifetime. Every agent, child agent, and external
           MCP client touching this case inherits exactly this.
         </p>
       </header>
@@ -108,7 +143,7 @@ export default function RunLauncher() {
           disabled={open.isPending || issue.isPending}
           className="rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-6 py-3 font-semibold text-emerald-200 transition hover:bg-emerald-900/50 disabled:opacity-40"
         >
-          {open.isPending || issue.isPending ? "…" : "Issue contract → start autonomous resolution"}
+          {open.isPending || issue.isPending ? "…" : "Issue contract → start agent resolution in chat"}
         </button>
         {(open.isError || issue.isError) && (
           <div className="mt-3 rounded-xl border border-rose-500/40 bg-rose-950/30 p-3 text-sm text-rose-200">

@@ -9,6 +9,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "crypto";
 
 import { LeashEnforcer } from "../server/lib/leash-enforce";
 import { RESERVATION_STATUS, EVENT_TYPE } from "../server/lib/leash-constants";
@@ -25,6 +26,15 @@ const REQ = (over: Partial<{ action: string; requestId: string; amountCents: num
   refund: false,
   ...over,
 });
+
+function hashCredential(credential: string): string {
+  return createHash("sha256").update(credential).digest("hex");
+}
+
+const HELPER_CREDENTIAL = "helper_credential_test";
+const HELPER_HASH = hashCredential(HELPER_CREDENTIAL);
+const READER_CREDENTIAL = "reader_credential_test";
+const READER_HASH = hashCredential(READER_CREDENTIAL);
 
 test("01 allowed action passes the gate, executes, settles into permanent spend", async () => {
   const db = new MemoryLeashDB();
@@ -63,15 +73,16 @@ test("03 cumulative budget is enforced across delegated agents", async () => {
   db.seedDelegate("ct_1", "helper", {
     permittedActions: ["inspect-order", "issue-refund", "draft-response"],
     maxRefunds: 1, budgetCapCents: 2500,
+    credentialHash: "hash_" + createHash("sha256").update("helper_credential").digest("hex"),
   });
   const leash = makeEnforcer(db);
 
   const parent = await leash.approve("ct_1", REQ({ requestId: "rq-p", amountCents: 1500, refund: true }), { caller: "root-agent" });
   assert.equal(parent.outcome, "approved");
   // child draws from the SAME contract pool — not a fresh budget
-  const child = await leash.approve("ct_1", REQ({ requestId: "rq-c", amountCents: 1000, refund: false }), { caller: "subagent:helper" });
+  const child = await leash.approve("ct_1", REQ({ requestId: "rq-c", amountCents: 1000, refund: false }), { caller: "subagent:helper:cred_helper" });
   assert.equal(child.outcome, "approved");
-  const over = await leash.approve("ct_1", REQ({ requestId: "rq-x", amountCents: 1 }), { caller: "subagent:helper" });
+  const over = await leash.approve("ct_1", REQ({ requestId: "rq-x", amountCents: 1 }), { caller: "subagent:helper:cred_helper" });
   assert.equal(over.outcome, "rejected");
   assert.equal(over.decision?.code, "budget_exceeded");
   assert.equal(db.contracts.get("ct_1")!.spentCents, 2500);
@@ -105,15 +116,15 @@ test("05 expired authority cannot be reused (clock advanced past expiresAt)", as
 test("06 concurrent requests cannot overspend the last allowance", async () => {
   const db = new MemoryLeashDB();
   db.seedContract("ct_1", { budgetCents: 500, maxRefunds: 0 });
-  db.seedDelegate("ct_1", "one", { permittedActions: ["issue-refund"], maxRefunds: 0, budgetCapCents: 500 });
-  db.seedDelegate("ct_1", "two", { permittedActions: ["issue-refund"], maxRefunds: 0, budgetCapCents: 500 });
+  db.seedDelegate("ct_1", "one", { permittedActions: ["issue-refund"], maxRefunds: 0, budgetCapCents: 500, credentialHash: "hash1" });
+  db.seedDelegate("ct_1", "two", { permittedActions: ["issue-refund"], maxRefunds: 0, budgetCapCents: 500, credentialHash: "hash2" });
   const leash = makeEnforcer(db);
 
   // three concurrent claims on the same $5.00 — only one can win
   const results = await Promise.all([
     leash.approve("ct_1", REQ({ requestId: "rq-a", amountCents: 500 }), { caller: "root-agent" }),
-    leash.approve("ct_1", REQ({ requestId: "rq-b", amountCents: 500 }), { caller: "subagent:one" }),
-    leash.approve("ct_1", REQ({ requestId: "rq-c", amountCents: 500 }), { caller: "subagent:two" }),
+    leash.approve("ct_1", REQ({ requestId: "rq-b", amountCents: 500 }), { caller: "subagent:one:cred1" }),
+    leash.approve("ct_1", REQ({ requestId: "rq-c", amountCents: 500 }), { caller: "subagent:two:cred2" }),
   ]);
 
   const approved = results.filter((r) => r.outcome === "approved");
@@ -233,14 +244,14 @@ test("13 unknown contract fails closed — no execution, rejection receipted", a
 test("14 count hold wins but budget hold loses -> count unwound, rejection recorded", async () => {
   const db = new MemoryLeashDB();
   db.seedContract("ct_1", { budgetCents: 500, spentCents: 0, maxRefunds: 2 });
-  db.seedDelegate("ct_1", "one", { permittedActions: ["issue-refund"], maxRefunds: 2, budgetCapCents: 500 });
+  db.seedDelegate("ct_1", "one", { permittedActions: ["issue-refund"], maxRefunds: 2, budgetCapCents: 500, credentialHash: "hash1" });
   const leash = makeEnforcer(db);
 
   // both refunds pass evaluate() against the stale snapshot; only one can hold
   // the $5.00 — the loser must unwind its count hold and leave a crash receipt
   const results = await Promise.all([
     leash.approve("ct_1", REQ({ requestId: "rq-u1", amountCents: 400, refund: true }), { caller: "root-agent" }),
-    leash.approve("ct_1", REQ({ requestId: "rq-u2", amountCents: 400, refund: true }), { caller: "subagent:one" }),
+    leash.approve("ct_1", REQ({ requestId: "rq-u2", amountCents: 400, refund: true }), { caller: "subagent:one:cred1" }),
   ]);
 
   const approved = results.filter((r) => r.outcome === "approved");
@@ -319,29 +330,29 @@ test("18 held reservations from before a revocation cannot settle after it", asy
 test("19 declared child acting outside its envelope is rejected at execution time", async () => {
   const db = new MemoryLeashDB();
   db.seedContract("ct_1"); // the CONTRACT permits issue-refund
-  db.seedDelegate("ct_1", "helper", { permittedActions: ["inspect-order"], maxRefunds: 0, budgetCapCents: 0 });
+  db.seedDelegate("ct_1", "helper", { permittedActions: ["inspect-order"], maxRefunds: 0, budgetCapCents: 0, credentialHash: "hash" });
   const leash = makeEnforcer(db);
 
-  const a = await leash.approve("ct_1", REQ({ requestId: "rq-ch", amountCents: 100, refund: true }), { caller: "subagent:helper" });
+  const a = await leash.approve("ct_1", REQ({ requestId: "rq-ch", amountCents: 100, refund: true }), { caller: "subagent:helper:cred" });
   assert.equal(a.outcome, "rejected");
   assert.equal(a.decision?.code, "delegate_envelope_violation");
   assert.deepEqual(db.sideEffects, []);
   const rej = db.eventsOf("ct_1", EVENT_TYPE.REJECTED);
   assert.equal(rej.length, 1);
-  assert.equal(rej[0].caller, "subagent:helper");
+  assert.equal(rej[0].caller, "subagent:helper:cred");
 });
 
 test("20 child cannot spend above its delegated cap even for a permitted action", async () => {
   const db = new MemoryLeashDB();
   db.seedContract("ct_1", { budgetCents: 2500, maxRefunds: 3 });
-  db.seedDelegate("ct_1", "helper", { permittedActions: ["issue-refund"], maxRefunds: 1, budgetCapCents: 500 });
+  db.seedDelegate("ct_1", "helper", { permittedActions: ["issue-refund"], maxRefunds: 1, budgetCapCents: 500, credentialHash: "hash" });
   const leash = makeEnforcer(db);
 
-  const a = await leash.approve("ct_1", REQ({ requestId: "rq-cap", amountCents: 501, refund: true }), { caller: "subagent:helper" });
+  const a = await leash.approve("ct_1", REQ({ requestId: "rq-cap", amountCents: 501, refund: true }), { caller: "subagent:helper:cred" });
   assert.equal(a.outcome, "rejected");
   assert.equal(a.decision?.code, "delegate_envelope_violation");
 
-  const ok = await leash.approve("ct_1", REQ({ requestId: "rq-cap2", amountCents: 500, refund: true }), { caller: "subagent:helper" });
+  const ok = await leash.approve("ct_1", REQ({ requestId: "rq-cap2", amountCents: 500, refund: true }), { caller: "subagent:helper:cred" });
   assert.equal(ok.outcome, "approved", "at the cap boundary it passes");
 });
 
@@ -350,7 +361,7 @@ test("21 unknown child label fails closed", async () => {
   db.seedContract("ct_1");
   const leash = makeEnforcer(db);
 
-  const a = await leash.approve("ct_1", REQ({ requestId: "rq-ghost-child", amountCents: 0 }), { caller: "subagent:nobody" });
+  const a = await leash.approve("ct_1", REQ({ requestId: "rq-ghost-child", amountCents: 0 }), { caller: "subagent:nobody:cred" });
   assert.equal(a.outcome, "rejected");
   assert.equal(a.decision?.code, "delegate_not_found");
 });
@@ -358,13 +369,36 @@ test("21 unknown child label fails closed", async () => {
 test("22 child within its envelope is admitted and its label lands on the receipt", async () => {
   const db = new MemoryLeashDB();
   db.seedContract("ct_1");
-  db.seedDelegate("ct_1", "reader", { permittedActions: ["inspect-order"], maxRefunds: 0, budgetCapCents: 0 });
+  db.seedDelegate("ct_1", "reader", { permittedActions: ["inspect-order"], maxRefunds: 0, budgetCapCents: 0, credentialHash: "hash" });
   const leash = makeEnforcer(db);
 
-  const a = await leash.approve("ct_1", REQ({ action: "inspect-order", requestId: "rq-ro2", amountCents: 0 }), { caller: "subagent:reader" });
+  const a = await leash.approve("ct_1", REQ({ action: "inspect-order", requestId: "rq-ro2", amountCents: 0 }), { caller: "subagent:reader:cred" });
   assert.equal(a.outcome, "approved");
   const ex = db.eventsOf("ct_1", EVENT_TYPE.EXECUTED)[0];
-  assert.equal(ex.caller, "subagent:reader");
+  assert.equal(ex.caller, "subagent:reader:cred");
   const res = db.reservations.get("rq-ro2")!;
   assert.equal(res.delegateLabel, "reader");
+});
+
+test("23 invalid credential is rejected", async () => {
+  const db = new MemoryLeashDB();
+  db.seedContract("ct_cred");
+  db.seedDelegate("ct_cred", "helper", { permittedActions: ["issue-refund"], maxRefunds: 1, budgetCapCents: 1000, credentialHash: "valid_hash" });
+  const leash = makeEnforcer(db);
+
+  const invalid = await leash.approve("ct_cred", REQ({ requestId: "rq-invalid", amountCents: 100, refund: true }), { caller: "subagent:helper:bad_cred" });
+  assert.equal(invalid.outcome, "rejected");
+  assert.equal(invalid.decision?.code, "delegate_not_found");
+});
+
+test("24 valid credential is accepted", async () => {
+  const db = new MemoryLeashDB();
+  db.seedContract("ct_cred");
+  const validCred = "valid_cred";
+  const validHash = require("crypto").createHash("sha256").update("valid_cred").digest("hex");
+  db.seedDelegate("ct_cred", "helper", { permittedActions: ["issue-refund"], maxRefunds: 1, budgetCapCents: 1000, credentialHash: "valid_hash" });
+  const leash = makeEnforcer(db);
+
+  const valid = await leash.approve("ct_cred", REQ({ requestId: "rq-valid", amountCents: 100, refund: true }), { caller: "subagent:helper:valid_cred" });
+  assert.equal(valid.outcome, "approved");
 });

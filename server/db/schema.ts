@@ -31,6 +31,7 @@ export const contractDelegates = table("contract_delegates", {
   permittedActions: text("permitted_actions").notNull(), // JSON string[], subset of parent
   maxRefunds: integer("max_refunds").notNull(), // <= parent effective
   budgetCapCents: integer("budget_cap_cents").notNull(), // optional tighter sub-ceiling
+  credentialHash: text("credential_hash"),      // hash of delegate credential (never stored in plaintext)
   createdAt: integer("created_at").notNull(),
 });
 

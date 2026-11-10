@@ -47,6 +47,7 @@ export function makeLeashBridge() {
           permittedActions: contractDelegates.permittedActions,
           maxRefunds: contractDelegates.maxRefunds,
           budgetCapCents: contractDelegates.budgetCapCents,
+          credentialHash: contractDelegates.credentialHash,
         })
         .from(contractDelegates)
         .where(and(

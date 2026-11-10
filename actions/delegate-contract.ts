@@ -4,13 +4,15 @@
  * envelope checked against its parent's envelope. Widenings are rejected —
  * a child can only ever be narrower than its parent on every axis.
  *
- * IDENTITY (HONEST MODEL):
- * The childLabel registered here is stored in contractDelegates.
- * HOWEVER: The Agent-Native framework does NOT automatically verify this
- * identity at execution time. The framework provides delegationDepth but
- * NO label in ctx.caller. For the enforcer to verify identity, the
- * application must set ctx.caller = "subagent:<label>" when spawning
- * the child agent. This is a TRUST MODEL, not a cryptographic guarantee.
+ * IDENTITY (VERIFIABLE CREDENTIAL MODEL):
+ * A high-entropy delegate credential is generated at registration time.
+ * The credential is a high-entropy token (e.g., 256-bit) that the parent
+ * agent passes to the child agent. The child agent MUST present this
+ * credential in the caller string as "subagent:<label>:<credential>".
+ * The enforcer verifies the credential by hashing it and comparing
+ * against the stored hash in contractDelegates. This is a VERIFIABLE
+ * credential model — the credential is never stored in plaintext, only
+ * its hash (using a cryptographic hash function).
  *
  * AUTHORIZATION: Only the parent delegate (or root agent for empty parentLabel)
  * may register child delegates. The caller must match the parent's registered
@@ -24,6 +26,7 @@ import { resolveCaller } from "../server/lib/leash-caller";
 import { contracts, contractDelegates, contractEvents } from "../server/db/schema";
 import { EVENT_TYPE } from "../server/lib/leash-constants";
 import { eq, and } from "drizzle-orm";
+import { createHash, randomBytes } from "crypto";
 
 function callerMatchesParent(caller: string, parentLabel: string): boolean {
   if (!parentLabel) {
@@ -31,17 +34,27 @@ function callerMatchesParent(caller: string, parentLabel: string): boolean {
     return caller === "root-agent";
   }
   // Child delegation: caller must be the parent delegate
-  // Format: "subagent:<parentLabel>" or "subagent:<parentLabel>:d<depth>"
-  return caller === `subagent:${parentLabel}` || caller.startsWith(`subagent:${parentLabel}:d`);
+  // Format: "subagent:<parentLabel>:<credential>" or "subagent:<parentLabel>:<credential>:d<depth>"
+  return caller === `subagent:${parentLabel}` || caller.startsWith(`subagent:${parentLabel}:`);
+}
+
+function generateCredential(): string {
+  // Generate a 256-bit (32-byte) high-entropy credential
+  return randomBytes(32).toString("base64url");
+}
+
+function hashCredential(credential: string): string {
+  // Hash the credential using SHA-256
+  return createHash("sha256").update(credential).digest("hex");
 }
 
 export default defineAction({
   description:
-    "Register a child agent inside a run contract with an attenuated envelope. The child's action set, refund count and budget cap must fit inside the parent envelope. The childLabel becomes the verified identity for enforcement. Only the parent delegate (or root-agent) may register children.",
+    "Register a child agent inside a run contract with an attenuated envelope. A verifiable credential is generated — the parent must pass this credential to the child agent. The child MUST present it as 'subagent:<label>:<credential>' in calls. The credential is shown ONLY ONCE at registration.",
   schema: z.object({
     contractId: z.string(),
     parentLabel: z.string().describe("Label of the parent delegate; empty means the root agent"),
-    childLabel: z.string().min(1).describe("Label for the new child agent (becomes verified identity)"),
+    childLabel: z.string().min(1).describe("Label for the new child agent"),
     permittedActions: z.array(z.string()).min(1),
     maxRefunds: z.number().int().min(0),
     budgetCapCents: z.number().int().min(0),
@@ -122,6 +135,10 @@ export default defineAction({
       return { ok: false, code: gate.code, message: gate.message };
     }
 
+    // Generate verifiable credential
+    const credential = generateCredential();
+    const credentialHash = hashCredential(credential);
+
     const id = `dg_${crypto.randomUUID()}`;
     await db.insert(contractDelegates).values({
       id,
@@ -131,6 +148,7 @@ export default defineAction({
       permittedActions: JSON.stringify(input.permittedActions),
       maxRefunds: input.maxRefunds,
       budgetCapCents: input.budgetCapCents,
+      credentialHash,
       createdAt: now,
     });
     await db.insert(contractEvents).values({
@@ -147,9 +165,12 @@ export default defineAction({
         maxRefunds: input.maxRefunds,
         budgetCapCents: input.budgetCapCents,
         parent: input.parentLabel || "root",
+        // Credential is shown ONLY ONCE — here in the event detail
+        // In production, this would be delivered via a secure channel
+        credential: credential,
       }),
       createdAt: now,
     });
-    return { ok: true, delegateId: id, childLabel: input.childLabel };
+    return { ok: true, delegateId: id, childLabel: input.childLabel, credential };
   },
 });

@@ -11,7 +11,7 @@ import type { LeashRow, ReservationRow } from "../server/lib/leash-enforce";
 
 export class MemoryLeashDB {
   contracts = new Map<string, LeashRow>();
-  delegates = new Map<string, { label: string; permittedActions: string; maxRefunds: number; budgetCapCents: number }>();
+  delegates = new Map<string, { label: string; permittedActions: string; maxRefunds: number; budgetCapCents: number; credentialHash: string | null }>();
   reservations = new Map<string, ReservationRow>();
   events: Array<{
     id: string; contractId: string; type: string; action: string | null;
@@ -49,12 +49,13 @@ export class MemoryLeashDB {
     return this.contracts.get(contractId);
   }
 
-  seedDelegate(contractId: string, label: string, over: { permittedActions?: string[]; maxRefunds?: number; budgetCapCents?: number } = {}) {
+  seedDelegate(contractId: string, label: string, over: { permittedActions?: string[]; maxRefunds?: number; budgetCapCents?: number; credentialHash?: string | null } = {}) {
     this.delegates.set(`${contractId}::${label}`, {
       label,
       permittedActions: JSON.stringify(over.permittedActions ?? ["inspect-order"]),
       maxRefunds: over.maxRefunds ?? 0,
       budgetCapCents: over.budgetCapCents ?? 0,
+      credentialHash: over.credentialHash ?? null,
     });
   }
 

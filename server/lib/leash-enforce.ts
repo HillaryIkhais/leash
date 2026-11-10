@@ -44,6 +44,7 @@ import {
   type LeashSnapshot,
 } from "./leash-engine";
 import { CONTRACT_STATUS, RESERVATION_STATUS, EVENT_TYPE } from "./leash-constants";
+import { createHash } from "crypto";
 
 export interface LeashRow {
   id: string;
@@ -62,6 +63,7 @@ export interface DelegateRow {
   permittedActions: string; // JSON
   maxRefunds: number;
   budgetCapCents: number;
+  credentialHash: string | null;
 }
 
 export interface ReservationRow {
@@ -155,40 +157,39 @@ export class LeashEnforcer {
     // enforcer's clock alone, never by the request payload.
     const decision = evaluate(snap, { ...req, now });
 
-    // Extract verified delegate label from caller string.
-    // Format: "subagent:<label>" where label MUST be registered in contractDelegates.
+    // Extract delegate credentials from caller string.
+    // Format: "subagent:<label>:<credential>" where credential is verified against stored hash.
     // Caller-supplied childLabel in action inputs is IGNORED.
-    const delegateLabel = this.extractVerifiedDelegateLabel(ctx.caller);
+    const delegateCreds = this.extractDelegateCredentials(ctx.caller);
     
     const reservation: ReservationRow = {
       requestId: req.requestId,
       contractId,
-      delegateLabel,
+      delegateLabel: delegateCreds?.label ?? null,
       action: req.action,
       amountCents: req.amountCents ?? 0,
       outcome: decision.ok ? "APPROVED" : `REJECTED:${decision.code}`,
       status: RESERVATION_STATUS.HELD,
     };
 
-    // 2.5 delegate envelope binding. A verified child acts inside its
-    // registered envelope, not just the contract's: execution-time
-    // attenuation, fail-closed for unknown labels. This is what makes the
-    // delegation envelope binding rather than decorative. Runs only when
-    // the contract gate passed — the contract's own rejection code wins.
+    // 2.5 delegate envelope binding with credential verification.
+    // A verified child acts inside its registered envelope, not just the contract's:
+    // execution-time attenuation, fail-closed for unknown/invalid credentials.
+    // Runs only when the contract gate passed — the contract's own rejection code wins.
     let delegateRow: DelegateRow | undefined;
-    if (delegateLabel && decision.ok) {
-      delegateRow = await this.db.queryDelegate(contractId, delegateLabel);
+    if (delegateCreds && decision.ok) {
+      delegateRow = await this.verifyDelegateCredential(contractId, delegateCreds.label, delegateCreds.credential);
       let envelopeViolation: string | null = null;
       if (!delegateRow) {
-        envelopeViolation = `verified child '${delegateLabel}' is not registered on this contract`;
+        envelopeViolation = `verified child '${delegateCreds.label}' not found or invalid credential`;
       } else {
         const permitted = JSON.parse(delegateRow.permittedActions) as string[];
         if (!permitted.includes(req.action)) {
-          envelopeViolation = `${req.action} is not in child '${delegateLabel}'s delegated envelope`;
+          envelopeViolation = `${req.action} is not in child '${delegateCreds.label}'s delegated envelope`;
         } else if ((req.amountCents ?? 0) > delegateRow.budgetCapCents) {
-          envelopeViolation = `amount $${fmtCents(req.amountCents ?? 0)} exceeds child '${delegateLabel}'s cap $${fmtCents(delegateRow.budgetCapCents)}`;
+          envelopeViolation = `amount $${fmtCents(req.amountCents ?? 0)} exceeds child '${delegateCreds.label}'s cap $${fmtCents(delegateRow.budgetCapCents)}`;
         } else if (req.refund && delegateRow.maxRefunds <= 0) {
-          envelopeViolation = `child '${delegateLabel}' was delegated no refunds`;
+          envelopeViolation = `child '${delegateCreds.label}' was delegated no refunds`;
         }
       }
       if (envelopeViolation) {
@@ -202,7 +203,7 @@ export class LeashEnforcer {
           caller: ctx.caller,
           amountCents: req.amountCents ?? 0,
           code: delegateRow ? "delegate_envelope_violation" : "delegate_not_found",
-          detail: JSON.stringify({ message: envelopeViolation, child: delegateLabel }),
+          detail: JSON.stringify({ message: envelopeViolation, child: delegateCreds.label }),
           createdAt: now,
         });
         return {
@@ -304,17 +305,44 @@ export class LeashEnforcer {
   }
 
   /**
-   * Extract the verified delegate label from the caller string.
-   * Expected format: "subagent:<label>" where label is from contractDelegates registry.
-   * Returns null for root-agent, mcp, frontend, or malformed callers.
+   * Extract the delegate label and credential from the caller string.
+   * Expected format: "subagent:<label>:<credential>" or "subagent:<label>:<credential>:d<depth>"
+   * Returns { label, credential } or null if not a subagent caller.
    */
-  private extractVerifiedDelegateLabel(caller: string): string | null {
+  private extractDelegateCredentials(caller: string): { label: string; credential: string } | null {
     if (caller.startsWith("subagent:")) {
-      // Format: "subagent:<label>" or "subagent:<label>:d<depth>"
-      const parts = caller.slice("subagent:".length).split(":d");
-      return parts[0] || null;
+      // Format: "subagent:<label>:<credential>" or "subagent:<label>:<credential>:d<depth>"
+      const parts = caller.slice("subagent:".length).split(":");
+      if (parts.length >= 2) {
+        const label = parts[0];
+        const credential = parts[1];
+        if (label && credential) {
+          return { label, credential };
+        }
+      }
     }
     return null;
+  }
+
+  /**
+   * Verify a delegate credential against the stored hash.
+   * Returns the delegate row if verification succeeds, null otherwise.
+   */
+  private async verifyDelegateCredential(
+    contractId: string,
+    label: string,
+    credential: string
+  ): Promise<DelegateRow | null> {
+    const delegateRow = await this.db.queryDelegate(contractId, label);
+    if (!delegateRow || !delegateRow.credentialHash) {
+      return null;
+    }
+    // Hash the provided credential and compare with stored hash
+    const providedHash = createHash("sha256").update(credential).digest("hex");
+    if (providedHash !== delegateRow.credentialHash) {
+      return null;
+    }
+    return delegateRow;
   }
 
   /** Side effect succeeded — the hold becomes permanent spend. */

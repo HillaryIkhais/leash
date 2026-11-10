@@ -34,7 +34,15 @@ export default defineAction({
       return { ok: false, rejected: true, code: approval.decision?.code, message: approval.decision?.message };
     }
 
-    await leash.settle(input.requestId);
-    return { ok: true, receiptId: approval.receiptId, stored: input.draft };
+    let settled = false;
+    try {
+      await leash.settle(input.requestId);
+      settled = true;
+      return { ok: true, receiptId: approval.receiptId, stored: input.draft };
+    } finally {
+      if (!settled) {
+        await leash.release(input.requestId);
+      }
+    }
   },
 });

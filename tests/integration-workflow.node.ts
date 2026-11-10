@@ -4,6 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "crypto";
 
 import { LeashEnforcer } from "../server/lib/leash-enforce";
 import { EVENT_TYPE } from "../server/lib/leash-constants";
@@ -22,6 +23,15 @@ const REQ = (over: Partial<{ action: string; requestId: string; amountCents: num
   ...over,
 });
 
+function hashCredential(credential: string): string {
+  return createHash("sha256").update(credential).digest("hex");
+}
+
+const HELPER_CREDENTIAL = "helper_credential_test";
+const HELPER_HASH = hashCredential(HELPER_CREDENTIAL);
+const READER_CREDENTIAL = "reader_credential_test";
+const READER_HASH = hashCredential(READER_CREDENTIAL);
+
 test("integration: full resolution workflow with budget exhaustion", async () => {
   const db = new MemoryLeashDB();
   db.seedContract("ct_integration", { budgetCents: 2500, maxRefunds: 2 });
@@ -29,6 +39,7 @@ test("integration: full resolution workflow with budget exhaustion", async () =>
     permittedActions: ["inspect-order", "issue-refund", "draft-response"],
     maxRefunds: 1,
     budgetCapCents: 1500,
+    credentialHash: hashCredential(HELPER_CREDENTIAL),
   });
   const leash = makeEnforcer(db);
 
@@ -78,13 +89,14 @@ test("integration: full resolution workflow with budget exhaustion", async () =>
   assert.equal(db.eventsOf("ct_integration", EVENT_TYPE.REJECTED).length, 1); // refund2
 });
 
-test("integration: child delegate cannot exceed its envelope", async () => {
+test("integration: child delegate cannot exceed its envelope with valid credential", async () => {
   const db = new MemoryLeashDB();
   db.seedContract("ct_child", { budgetCents: 5000, maxRefunds: 3 });
   db.seedDelegate("ct_child", "helper", {
     permittedActions: ["inspect-order", "issue-refund"],
     maxRefunds: 1,
     budgetCapCents: 1000,
+    credentialHash: hashCredential("helper_credential"),
   });
   const leash = makeEnforcer(db);
 
@@ -98,33 +110,74 @@ test("integration: child delegate cannot exceed its envelope", async () => {
   assert.equal(parentRefund.outcome, "approved");
   await leash.settle("rq-parent");
 
-  // Child tries to exceed its budget cap (1000)
+  // Child tries to exceed its budget cap (1000) with valid credential
   const childOverCap = await leash.approve("ct_child", REQ({ 
     action: "issue-refund", 
     requestId: "rq-child-over", 
     amountCents: 1500,
     refund: true
-  }), { caller: "subagent:helper" });
+  }), { caller: `subagent:helper:${HELPER_CREDENTIAL}` });
   assert.equal(childOverCap.outcome, "rejected");
   assert.equal(childOverCap.decision?.code, "delegate_envelope_violation");
 
-  // Child tries action not in its envelope
+  // Child tries action not in its envelope with valid credential
   const childWrongAction = await leash.approve("ct_child", REQ({ 
     action: "draft-response", 
     requestId: "rq-child-wrong", 
     amountCents: 0
-  }), { caller: "subagent:helper" });
+  }), { caller: `subagent:helper:${HELPER_CREDENTIAL}` });
   assert.equal(childWrongAction.outcome, "rejected");
   assert.equal(childWrongAction.decision?.code, "delegate_envelope_violation");
 
-  // Child within envelope succeeds
+  // Child within envelope succeeds with valid credential
   const childOk = await leash.approve("ct_child", REQ({ 
     action: "issue-refund", 
     requestId: "rq-child-ok", 
     amountCents: 500,
     refund: true
-  }), { caller: "subagent:helper" });
+  }), { caller: `subagent:helper:${HELPER_CREDENTIAL}` });
   assert.equal(childOk.outcome, "approved");
+});
+
+test("integration: invalid credential is rejected", async () => {
+  const db = new MemoryLeashDB();
+  db.seedContract("ct_cred_test", { budgetCents: 5000, maxRefunds: 3 });
+  db.seedDelegate("ct_cred_test", "helper", {
+    permittedActions: ["inspect-order", "issue-refund"],
+    maxRefunds: 1,
+    budgetCapCents: 1000,
+    credentialHash: hashCredential("valid_credential"),
+  });
+  const leash = makeEnforcer(db);
+
+  // Valid credential works
+  const valid = await leash.approve("ct_cred_test", REQ({ 
+    action: "issue-refund", 
+    requestId: "rq-valid", 
+    amountCents: 500,
+    refund: true
+  }), { caller: `subagent:helper:${HELPER_CREDENTIAL}` });
+  assert.equal(valid.outcome, "approved");
+
+  // Invalid credential fails
+  const invalid = await leash.approve("ct_cred_test", REQ({ 
+    action: "issue-refund", 
+    requestId: "rq-invalid", 
+    amountCents: 500,
+    refund: true
+  }), { caller: "subagent:helper:invalid_credential" });
+  assert.equal(invalid.outcome, "rejected");
+  assert.equal(invalid.decision?.code, "delegate_not_found");
+
+  // Valid credential for wrong delegate label fails
+  const wrongLabel = await leash.approve("ct_cred_test", REQ({ 
+    action: "issue-refund", 
+    requestId: "rq-wrong-label", 
+    amountCents: 500,
+    refund: true
+  }), { caller: `subagent:nonexistent:${HELPER_CREDENTIAL}` });
+  assert.equal(wrongLabel.outcome, "rejected");
+  assert.equal(wrongLabel.decision?.code, "delegate_not_found");
 });
 
 test("integration: revocation immediately blocks further actions", async () => {

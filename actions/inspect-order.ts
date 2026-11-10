@@ -37,14 +37,22 @@ export default defineAction({
       };
     }
 
-    // side effect: pure read
-    const [order] = await getDb()
-      .select()
-      .from(supportCases)
-      .where(eq(supportCases.id, input.caseId))
-      .limit(1);
+    // Side effect: pure read — no budget/count holds, but still settle for receipt
+    let settled = false;
+    try {
+      const [order] = await getDb()
+        .select()
+        .from(supportCases)
+        .where(eq(supportCases.id, input.caseId))
+        .limit(1);
 
-    await leash.settle(input.requestId);
-    return { ok: true, receiptId: approval.receiptId, order };
+      settled = true;
+      await leash.settle(input.requestId);
+      return { ok: true, receiptId: approval.receiptId, order };
+    } finally {
+      if (!settled) {
+        await leash.release(input.requestId);
+      }
+    }
   },
 });

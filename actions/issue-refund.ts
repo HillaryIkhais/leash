@@ -4,6 +4,7 @@
  *   1. approve(): idempotency -> evaluate() -> atomic budget/count holds
  *   2. side effect (recorded refund)
  *   3. settle(): hold becomes permanent spend
+ *   On side-effect failure: release() returns the allowance
  * Rejections throw ActionContractError — the framework surfaces the error
  * code identically across UI, agent tool-result, HTTP and MCP surfaces.
  *
@@ -48,30 +49,39 @@ export default defineAction({
       });
     }
 
-    // ---- side effect begins ----
-    const db = getDb();
-    const refundId = `rf_${crypto.randomUUID()}`;
-    const [victim] = await db.select().from(supportCases).where(eq(supportCases.id, input.caseId)).limit(1);
-    // the receipt id IS the reservation requestId; recover the contract id it approved under
-    const [receipt] = await db.select()
-      .from(contractReservations)
-      .where(eq(contractReservations.requestId, input.requestId))
-      .limit(1);
+    // Side effect with proper reservation lifecycle:
+    // - On success: settle() makes the hold permanent
+    // - On failure: release() returns the allowance
+    let settled = false;
+    try {
+      const db = getDb();
+      const refundId = `rf_${crypto.randomUUID()}`;
+      const [victim] = await db.select().from(supportCases).where(eq(supportCases.id, input.caseId)).limit(1);
+      const [receipt] = await db.select()
+        .from(contractReservations)
+        .where(eq(contractReservations.requestId, input.requestId))
+        .limit(1);
 
-    await db.insert(contractEvents).values({
-      id: `ev_${crypto.randomUUID()}`,
-      contractId: receipt?.contractId ?? approval.receiptId ?? input.caseId,
-      type: "REFUND_ISSUED",
-      action: "issue-refund",
-      caller,
-      amountCents: input.amountCents,
-      code: null,
-      detail: JSON.stringify({ refundId, orderRef: victim?.orderRef ?? "unknown" }),
-      createdAt: Date.now(),
-    });
-    // ---- side effect ends ----
+      await db.insert(contractEvents).values({
+        id: `ev_${crypto.randomUUID()}`,
+        contractId: receipt?.contractId ?? approval.receiptId ?? input.caseId,
+        type: "REFUND_ISSUED",
+        action: "issue-refund",
+        caller,
+        amountCents: input.amountCents,
+        code: null,
+        detail: JSON.stringify({ refundId, orderRef: victim?.orderRef ?? "unknown" }),
+        createdAt: Date.now(),
+      });
 
-    await leash.settle(input.requestId);
-    return { ok: true, receiptId: approval.receiptId, refundId, remainingCents: approval.decision?.remainingCents };
+      settled = true;
+      await leash.settle(input.requestId);
+      return { ok: true, receiptId: approval.receiptId, refundId: `rf_${crypto.randomUUID()}`, remainingCents: approval.decision?.remainingCents };
+    } finally {
+      if (!settled) {
+        // Side effect failed — release the reservation so allowance returns
+        await leash.release(input.requestId);
+      }
+    }
   },
 });
