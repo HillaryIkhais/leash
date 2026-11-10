@@ -35,6 +35,7 @@ jobs:
       - name: Build for Vercel
         run: pnpm build
         env:
+          NITRO_PRESET: vercel
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
 
